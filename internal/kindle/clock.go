@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const defaultClockFont = "/mnt/us/fonts/InstrumentSerif-Regular.ttf"
+const defaultClockFont = "/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
 
 // ClockOptions controls the clock's appearance. Zero values select defaults
 // sized relative to the display, so the mode works across Kindle resolutions.

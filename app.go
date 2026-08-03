@@ -16,7 +16,7 @@ import (
 
 func main() {
 	address := flag.String("address", "192.168.0.10:22", "Kindle SSH address")
-	font := flag.String("font", "/mnt/us/fonts/InstrumentSerif-Regular.ttf", "font path on the Kindle")
+	font := flag.String("font", "/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf", "font path on the Kindle")
 	fontSize := flag.Int("font-size", 0, "clock font size in pixels (0 = automatic)")
 	flag.Parse()
 	if flag.NArg() != 1 || flag.Arg(0) != "clock" {
