@@ -4,6 +4,7 @@ package sshclient
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -41,7 +42,11 @@ func (c *SSHClient) Run(command string) (string, error) {
 	defer session.Close()
 	output, err := session.CombinedOutput(command)
 	if err != nil {
-		return string(output), fmt.Errorf("run command: %w", err)
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			return string(output), fmt.Errorf("run command: %w", err)
+		}
+		return string(output), fmt.Errorf("run command: %w: %s", err, message)
 	}
 	return string(output), nil
 }
