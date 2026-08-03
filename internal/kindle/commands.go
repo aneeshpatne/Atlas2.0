@@ -12,7 +12,11 @@ import (
 
 // Device is a Kindle reachable through an established SSH connection.
 type Device struct {
-	client *sshclient.SSHClient
+	client commandRunner
+}
+
+type commandRunner interface {
+	Run(command string) (string, error)
 }
 
 // New wraps an SSH client as a Kindle device.
