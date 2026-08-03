@@ -45,27 +45,45 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	if err != nil {
 		return err
 	}
+
+	layout := newDashboardLayout(width, height)
+	// Prefer the largest face that still fits the clock band. drawClock may
+	// shrink slightly for long times ("12:59") so AM/PM stays visible.
 	if options.FontSize == 0 {
-		options.FontSize = height * 42 / 100
+		options.FontSize = layout.clock.height * 96 / 100
 	}
 	if options.FontSize < 1 {
 		return fmt.Errorf("clock: font size must be positive")
 	}
+	maxFont := layout.clock.height * 98 / 100
+	if options.FontSize > maxFont {
+		options.FontSize = maxFont
+	}
 
-	// A stable, generously padded box means glyphs from the previous minute are
-	// always erased, including when proportional digits have different widths.
-	boxHeight := height * 58 / 100
-	boxTop := (height - boxHeight) / 2
-	box := displayRect{top: boxTop, left: 0, width: width, height: boxHeight}
+	if err := d.drawStaticChrome(options, layout, width, height); err != nil {
+		return err
+	}
+	lastDate := ""
+	lastClock := ""
 
 	for {
 		now := options.Now()
-		if err := d.drawClock(now.Format("15:04"), options, box, height); err != nil {
-			return err
+		date := now.Format("Monday, January 2")
+		if date != lastDate {
+			if err := d.drawDate(date, options, layout, width, height); err != nil {
+				return err
+			}
+			lastDate = date
 		}
-
-		nextMinute := now.Truncate(time.Minute).Add(time.Minute)
-		timer := time.NewTimer(nextMinute.Sub(now))
+		clock := now.Format("3:04 PM")
+		if clock != lastClock {
+			if err := d.drawClock(now, options, layout, width, height); err != nil {
+				return err
+			}
+			lastClock = clock
+		}
+		nextTick := now.Truncate(time.Minute).Add(time.Minute)
+		timer := time.NewTimer(nextTick.Sub(now))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -76,6 +94,89 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 }
 
 type displayRect struct{ top, left, width, height int }
+
+// dashboardLayout matches the ChatGPT mockup:
+//
+//	[ large centered time + PM ]
+//	        ——— solid rule ———
+//	      Monday, August 3
+//	····························
+//	      Climate : Warm
+//	TEMP | PRESSURE | HUMIDITY | PM2.5
+type dashboardLayout struct {
+	clock, clockRule, date, divider, climate displayRect
+	metrics                                  [4]displayRect
+	metricRules                              [4]displayRect
+	metricDividers                           [3]displayRect
+}
+
+func newDashboardLayout(width, height int) dashboardLayout {
+	// FBInk rejects 1px refresh regions as "bogus empty" (softlock guard).
+	line := max(2, height*3/1000)
+	marginX := width * 4 / 100
+	contentW := width - 2*marginX
+
+	// Four equal metric columns with gutters wide enough for a ≥2px divider.
+	divW := max(2, width*3/1000)
+	gutter := max(divW+4, width*8/1000)
+	colW := (contentW - 3*gutter) / 4
+
+	// Metrics strip is tall enough for large reading digits under short labels.
+	metricsTop := height * 72 / 100
+	metricsH := height * 26 / 100
+	// Label band is short; rule sits immediately under it.
+	ruleTop := metricsTop + metricsH*20 / 100
+	var metrics [4]displayRect
+	var metricRules [4]displayRect
+	var metricDividers [3]displayRect
+	for i := 0; i < 4; i++ {
+		left := marginX + i*(colW+gutter)
+		metrics[i] = displayRect{top: metricsTop, left: left, width: colW, height: metricsH}
+		ruleW := max(2, colW*55/100)
+		metricRules[i] = displayRect{
+			top: ruleTop, left: left + (colW-ruleW)/2,
+			width: ruleW, height: line,
+		}
+		if i < 3 {
+			metricDividers[i] = displayRect{
+				top:    metricsTop + metricsH*8/100,
+				left:   left + colW + (gutter-divW)/2,
+				width:  divW,
+				height: max(2, metricsH*84/100),
+			}
+		}
+	}
+
+	ruleW := width * 42 / 100
+	// Near-full width for the clock so wide faces ("12:59") stay huge.
+	clockMargin := width * 2 / 100
+	return dashboardLayout{
+		// Large clock band; metrics take a bigger share for big digits.
+		clock: displayRect{
+			top: height * 1 / 100, left: clockMargin,
+			width: width - 2*clockMargin, height: height * 48 / 100,
+		},
+		clockRule: displayRect{
+			top: height * 50 / 100, left: (width - ruleW) / 2,
+			width: ruleW, height: line,
+		},
+		date: displayRect{
+			top: height * 51 / 100, left: marginX,
+			width: contentW, height: height * 5 / 100,
+		},
+		divider: displayRect{
+			top: height * 57 / 100, left: marginX,
+			width: contentW, height: line,
+		},
+		climate: displayRect{
+			top: height * 59 / 100, left: marginX,
+			width: contentW, height: height * 7 / 100,
+		},
+		metrics:        metrics,
+		metricRules:    metricRules,
+		metricDividers: metricDividers,
+	}
+}
 
 func (d *Device) displaySize() (int, int, error) {
 	output, err := d.client.Run("/mnt/us/usbnet/bin/fbink -e")
@@ -96,22 +197,246 @@ func (d *Device) displaySize() (int, int, error) {
 
 var fbinkScreenSize = regexp.MustCompile(`screenWidth=([0-9]+);screenHeight=([0-9]+)`)
 
-func (d *Device) drawClock(value string, options ClockOptions, box displayRect, screenHeight int) error {
-	bottom := screenHeight - box.top - box.height
-	region := fmt.Sprintf("top=%d,left=%d,width=%d,height=%d", box.top, box.left, box.width, box.height)
-	typeSpec := fmt.Sprintf("regular=%s,px=%d,top=%d,bottom=%d,left=%d,right=%d,padding=BOTH",
-		options.FontPath, options.FontSize, box.top, bottom, box.left, box.left)
+const fbinkPath = "/mnt/us/usbnet/bin/fbink"
+
+// drawStaticChrome paints the non-clock chrome once at startup: rules,
+// climate line, metric labels/placeholders, and column dividers.
+func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	if err := d.fillRect(layout.clockRule, true); err != nil {
+		return fmt.Errorf("clock: clock rule: %w", err)
+	}
+	if err := d.drawDottedLine(layout.divider); err != nil {
+		return fmt.Errorf("clock: divider: %w", err)
+	}
+	if err := d.drawTextRegion("climate", "Climate : Warm", options.FontPath, screenHeight*7/100, layout.climate, screenWidth, screenHeight, true); err != nil {
+		return err
+	}
+
+	// Dummy readings until live sensors are wired in. Number and unit are
+	// drawn separately so the digits can fill most of the column height.
+	metrics := []struct {
+		name   string
+		label  string
+		number string
+		unit   string
+	}{
+		{"temperature", "TEMP", "24", "°C"},
+		{"pressure", "PRES", "1013", "hPa"},
+		{"humidity", "HUMI", "58", "%"},
+		{"pm25", "PM25", "12", "µg/m³"},
+	}
+	labelSize := screenHeight * 3 / 100
+	unitSize := screenHeight * 3 / 100
+	for i, metric := range metrics {
+		box := layout.metrics[i]
+		// Compact label + rule; most of the column is the reading.
+		labelBox := displayRect{
+			top: box.top, left: box.left,
+			width: box.width, height: box.height * 18 / 100,
+		}
+		if err := d.drawTextRegion(metric.name+" label", metric.label, options.FontPath, labelSize, labelBox, screenWidth, screenHeight, true); err != nil {
+			return err
+		}
+		if err := d.fillRect(layout.metricRules[i], true); err != nil {
+			return fmt.Errorf("clock: %s rule: %w", metric.name, err)
+		}
+		// Huge digits — size from the number band, then fit column width.
+		numberBox := displayRect{
+			top: box.top + box.height*26/100, left: box.left,
+			width: box.width, height: box.height * 48 / 100,
+		}
+		numberSize := numberBox.height * 92 / 100
+		// ~0.58em per digit; shrink if the reading is wider than the column.
+		if glyphs := len([]rune(metric.number)); glyphs > 0 {
+			if maxByWidth := numberBox.width * 100 / (58 * glyphs); numberSize > maxByWidth {
+				numberSize = maxByWidth
+			}
+		}
+		if err := d.drawTextRegion(metric.name+" number", metric.number, options.FontPath, numberSize, numberBox, screenWidth, screenHeight, true); err != nil {
+			return err
+		}
+		unitBox := displayRect{
+			top: box.top + box.height*76/100, left: box.left,
+			width: box.width, height: box.height * 20 / 100,
+		}
+		if err := d.drawTextRegion(metric.name+" unit", metric.unit, options.FontPath, unitSize, unitBox, screenWidth, screenHeight, true); err != nil {
+			return err
+		}
+	}
+	for i, div := range layout.metricDividers {
+		if err := d.fillRect(div, true); err != nil {
+			return fmt.Errorf("clock: metric divider %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	box := layout.clock
+	region := regionSpec(box)
+
+	timeText := now.Format("3:04")
+	periodText := now.Format("PM")
+	glyphs := len([]rune(timeText))
+
+	// Compact PM slot on the right; the remaining band is all for the digits.
+	// Capitals need ~0.9em each, so 2.3em covers "AM"/"PM" without clipping M.
+	periodSize := max(1, box.height*14/100)
+	periodWidth := periodSize * 23 / 10
+	gap := max(box.width*1/100, 10)
+	timeAvailW := box.width - gap - periodWidth
+	if timeAvailW < box.width/2 {
+		timeAvailW = box.width / 2
+		periodWidth = max(periodSize*2, box.width-gap-timeAvailW)
+	}
+
+	// Largest face that fits both the tall clock band and the available width.
+	// Helvetica digits are ~0.55em; keep a small pad so the last digit is not cut.
+	fontByHeight := box.height * 96 / 100
+	fontByWidth := timeAvailW * 100 / (55*glyphs + 8)
+	fontSize := options.FontSize
+	if fontSize > fontByHeight {
+		fontSize = fontByHeight
+	}
+	if fontSize > fontByWidth {
+		fontSize = fontByWidth
+	}
+	if fontSize < 1 {
+		fontSize = 1
+	}
+
+	timeWidth := min(timeAvailW, fontSize*55*glyphs/100+fontSize*12/100)
+	// Group time + PM and center the pair in the clock band.
+	groupWidth := timeWidth + gap + periodWidth
+	if groupWidth > box.width {
+		groupWidth = box.width
+		timeWidth = max(fontSize, groupWidth-gap-periodWidth)
+	}
+	groupLeft := box.left + (box.width-groupWidth)/2
+
+	timeBox := displayRect{
+		top: box.top, left: groupLeft,
+		width: timeWidth, height: box.height,
+	}
+	periodBox := displayRect{
+		top:    box.top + box.height*22/100,
+		left:   groupLeft + timeWidth + gap,
+		width:  periodWidth,
+		height: box.height * 42 / 100,
+	}
+	// padding=NONE lets px fill nearly the full type region height.
+	timeSpec := typeSpecNoPad(options.FontPath, fontSize, timeBox, screenWidth, screenHeight)
+	periodSpec := typeSpecNoPad(options.FontPath, periodSize, periodBox, screenWidth, screenHeight)
 
 	// Both writes are framebuffer-only. The final command refreshes exactly the
 	// clock rectangle, preventing intermediate white flashes and screen-wide wear.
 	command := fmt.Sprintf(
-		`/mnt/us/usbnet/bin/fbink -q -b -B WHITE -k %s && /mnt/us/usbnet/bin/fbink -q -b -B WHITE -C BLACK -m -M -t %s %s && /mnt/us/usbnet/bin/fbink -q -W GC16 -s %s`,
-		region, shellQuote(typeSpec), shellQuote(value), region,
+		`%s -q -b -B WHITE -k %s && %s -q -b -B WHITE -C BLACK -m -M -t %s -- %s && %s -q -b -B WHITE -C BLACK -m -M -t %s -- %s && %s -q -W GC16 -s %s`,
+		fbinkPath, region,
+		fbinkPath, shellQuote(timeSpec), shellQuote(timeText),
+		fbinkPath, shellQuote(periodSpec), shellQuote(periodText),
+		fbinkPath, region,
 	)
 	if _, err := d.client.Run(command); err != nil {
-		return fmt.Errorf("clock: draw %q: %w", value, err)
+		return fmt.Errorf("clock: draw %q: %w", now.Format("3:04 PM"), err)
 	}
 	return nil
+}
+
+func (d *Device) drawDate(value string, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	return d.drawTextRegion("date", value, options.FontPath, screenHeight*5/100, layout.date, screenWidth, screenHeight, true)
+}
+
+func (d *Device) drawTextRegion(name, value, font string, fontSize int, box displayRect, screenWidth, screenHeight int, centered bool) error {
+	if box.width < 2 || box.height < 2 {
+		return fmt.Errorf("clock: draw %s: region too small (%dx%d)", name, box.width, box.height)
+	}
+	// Cap font to the box so FBInk does not silently skip oversized type.
+	// padding=NONE lets faces fill nearly the full region height.
+	if fontSize > box.height*96/100 {
+		fontSize = max(1, box.height*96/100)
+	}
+	centerFlag := ""
+	if centered {
+		centerFlag = " -m -M"
+	}
+	region := regionSpec(box)
+	command := fmt.Sprintf(`%s -q -b -B WHITE -k %s && %s -q -b -B WHITE -C BLACK%s -t %s -- %s && %s -q -W GC16 -s %s`,
+		fbinkPath, region, fbinkPath, centerFlag, shellQuote(typeSpecNoPad(font, fontSize, box, screenWidth, screenHeight)), shellQuote(value), fbinkPath, region)
+	if _, err := d.client.Run(command); err != nil {
+		return fmt.Errorf("clock: draw %s: %w", name, err)
+	}
+	return nil
+}
+
+// fillRect paints a solid rectangle. black=true fills with black (rules/dividers);
+// black=false clears to white.
+func (d *Device) fillRect(box displayRect, black bool) error {
+	// FBInk treats 1px regions as empty and refuses to refresh them.
+	if box.width < 2 || box.height < 2 {
+		return nil
+	}
+	bg := "WHITE"
+	if black {
+		bg = "BLACK"
+	}
+	region := regionSpec(box)
+	// Fill via clear-with-background, then refresh the same region so the
+	// line is visible without a full-screen flash.
+	command := fmt.Sprintf(`%s -q -b -B %s -k %s && %s -q -W GC16 -s %s`,
+		fbinkPath, bg, region, fbinkPath, region)
+	if _, err := d.client.Run(command); err != nil {
+		return err
+	}
+	return nil
+}
+
+// drawDottedLine approximates the mockup's dotted full-width separator by
+// stamping short black segments with white gaps between them.
+func (d *Device) drawDottedLine(box displayRect) error {
+	if box.width < 2 || box.height < 2 {
+		return nil
+	}
+	// Clear the strip first so old ink doesn't ghost under the dots.
+	if err := d.fillRect(box, false); err != nil {
+		return err
+	}
+	dash := max(3, box.width*6/1000)
+	gap := max(3, box.width*5/1000)
+	var parts []string
+	for left := box.left; left+dash <= box.left+box.width; left += dash + gap {
+		seg := displayRect{top: box.top, left: left, width: dash, height: max(2, box.height)}
+		parts = append(parts, fmt.Sprintf(`%s -q -b -B BLACK -k %s`, fbinkPath, regionSpec(seg)))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	// One regional refresh over the whole strip after all dashes are painted.
+	parts = append(parts, fmt.Sprintf(`%s -q -W GC16 -s %s`, fbinkPath, regionSpec(box)))
+	if _, err := d.client.Run(strings.Join(parts, " && ")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func typeSpec(font string, fontSize int, box displayRect, screenWidth, screenHeight int) string {
+	return typeSpecPad(font, fontSize, box, screenWidth, screenHeight, "BOTH")
+}
+
+// typeSpecNoPad maximizes face size inside a region (used for the main clock digits).
+func typeSpecNoPad(font string, fontSize int, box displayRect, screenWidth, screenHeight int) string {
+	return typeSpecPad(font, fontSize, box, screenWidth, screenHeight, "NONE")
+}
+
+func typeSpecPad(font string, fontSize int, box displayRect, screenWidth, screenHeight int, padding string) string {
+	right := screenWidth - box.left - box.width
+	bottom := screenHeight - box.top - box.height
+	return fmt.Sprintf("regular=%s,px=%d,top=%d,bottom=%d,left=%d,right=%d,padding=%s",
+		font, fontSize, box.top, bottom, box.left, right, padding)
+}
+
+func regionSpec(box displayRect) string {
+	return fmt.Sprintf("top=%d,left=%d,width=%d,height=%d", box.top, box.left, box.width, box.height)
 }
 
 func shellQuote(value string) string {
