@@ -11,7 +11,7 @@ type SSHClient struct {
 	client *ssh.Client
 }
 
-func NewSSHClient(config Config) (*SSHClient, error){
+func NewSSHClient(config Config) (*SSHClient, error) {
 	privateKey, err := os.ReadFile(config.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("read private key: %w", err)
@@ -20,4 +20,31 @@ func NewSSHClient(config Config) (*SSHClient, error){
 	if err != nil {
 		return nil, fmt.Errorf("parse private key: %w", err)
 	}
+	sshConfig := &ssh.ClientConfig{
+		User:            config.Username,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	client, err := ssh.Dial("tcp", config.Address, sshConfig)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Kindle: %w", err)
+	}
+	return &SSHClient{client: client}, nil
+}
+
+func (c *SSHClient) Run(command string) (string, error) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("create SSH session: %w", err)
+	}
+	defer session.Close()
+	output, err := session.CombinedOutput(command)
+	if err != nil {
+		return string(output), fmt.Errorf("run command: %w", err)
+	}
+	return string(output), nil
+}
+
+func (c *SSHClient) Close() error {
+	return c.client.Close()
 }
