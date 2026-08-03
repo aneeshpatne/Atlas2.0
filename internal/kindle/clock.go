@@ -19,9 +19,10 @@ type ClockOptions struct {
 	Now      func() time.Time
 }
 
-// RunClock switches the Kindle to landscape and updates a centered HH:MM clock
-// once per minute. Each update touches only the clock rectangle and performs a
-// single non-flashing GC16 regional refresh. GC16 is slower than DU, but avoids
+// RunClock switches the Kindle to landscape, clears the display, sets the
+// front light to 20, then updates a centered HH:MM clock once per minute.
+// Each update touches only the clock rectangle and performs a single
+// non-flashing GC16 regional refresh. GC16 is slower than DU, but avoids
 // the cumulative ghosting that a clock running for hours would otherwise show.
 func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	if options.FontPath == "" {
@@ -32,6 +33,12 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	}
 
 	if err := d.SetRotation("horizontal"); err != nil {
+		return err
+	}
+	if err := d.ClearScreen(); err != nil {
+		return err
+	}
+	if err := d.SetBacklight(20); err != nil {
 		return err
 	}
 	width, height, err := d.displaySize()
