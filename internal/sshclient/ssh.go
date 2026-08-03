@@ -1,3 +1,4 @@
+// Package sshclient provides a thin SSH client for running remote commands.
 package sshclient
 
 import (
