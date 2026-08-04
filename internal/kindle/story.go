@@ -259,9 +259,11 @@ func (d *Device) drawOverlayTextRegion(name, value, font string, fontSize int, b
 	if fontSize > box.height*96/100 {
 		fontSize = max(1, box.height*96/100)
 	}
-	// -O keeps the glyph background transparent, preserving the image beneath
-	// the white text instead of painting an opaque white type region.
-	command := fmt.Sprintf(`%s -q -w -W GC16 -O -C WHITE -t %s -- %s`,
+	// -O (bgless) keeps the image under the glyphs. FBInk still needs a pen
+	// background that differs from the foreground: with the default white
+	// background, white bgless text blends to a no-op and nothing is drawn.
+	// -B BLACK is only used for that pen math; it is not painted.
+	command := fmt.Sprintf(`%s -q -w -W GC16 -O -C WHITE -B BLACK -t %s -- %s`,
 		fbinkPath, shellQuote(typeSpecNoPad(font, fontSize, box, screenWidth, screenHeight)), shellQuote(value))
 	if _, err := d.client.Run(command); err != nil {
 		return fmt.Errorf("story: draw %s: %w", name, err)

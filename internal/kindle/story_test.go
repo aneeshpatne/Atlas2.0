@@ -117,7 +117,7 @@ func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 		"-q -w -W GC16 -i '/tmp/atlas-story-image'",
 		"x=0,y=0,w=1448,h=1072,dither",
 		"rm -f /tmp/atlas-story-image",
-		"-q -w -W GC16 -O -C WHITE",
+		"-q -w -W GC16 -O -C WHITE -B BLACK",
 		"left=101",
 	} {
 		if !strings.Contains(joined, want) {
