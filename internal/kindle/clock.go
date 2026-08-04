@@ -136,10 +136,10 @@ func newDashboardLayout(width, height int) dashboardLayout {
 	gutter := max(divW+4, width*6/1000)
 	colW := (contentW - 3*gutter) / 4
 
-	// Metrics strip is tall enough for large reading digits under compact labels,
-	// while preserving a little breathing room at the bottom of the display.
-	metricsTop := height * 73 / 100
-	metricsH := height * 26 / 100
+	// Metrics strip stays tall enough for large reading digits; date and
+	// climate (remark) claim a bit more vertical room so their type can grow.
+	metricsTop := height * 76 / 100
+	metricsH := height * 23 / 100
 	// Label band is intentionally short; the rule is a typographic underline.
 	ruleTop := metricsTop + metricsH*19/100
 	var metrics [4]displayRect
@@ -167,24 +167,29 @@ func newDashboardLayout(width, height int) dashboardLayout {
 	// Keep the hero clock broad so wide faces ("12:59") stay generous, but
 	// leave a visible edge margin so the composition does not touch the bezel.
 	clockMargin := width * 1 / 100
-	climateTop := height * 66 / 100
-	climateH := height * 6 / 100
+	// Date + climate get taller bands so font sizes are not capped tiny by
+	// drawTextRegion's box-height limit (box.h * 96%).
+	dateTop := height * 56 / 100
+	dateH := height * 9 / 100
+	dividerTop := height * 66 / 100
+	climateTop := height * 67 / 100
+	climateH := height * 8 / 100
 	return dashboardLayout{
-		// Let the time dominate the display while retaining a slim bezel margin.
+		// Slightly shorter hero clock to fund larger date / climate type.
 		clock: displayRect{
 			top: height * 0 / 100, left: clockMargin,
-			width: width - 2*clockMargin, height: height * 59 / 100,
+			width: width - 2*clockMargin, height: height * 55 / 100,
 		},
 		clockRule: displayRect{
-			top: height * 59 / 100, left: (width - ruleW) / 2,
+			top: height * 55 / 100, left: (width - ruleW) / 2,
 			width: ruleW, height: line,
 		},
 		date: displayRect{
-			top: height * 60 / 100, left: marginX,
-			width: contentW, height: height * 5 / 100,
+			top: dateTop, left: marginX,
+			width: contentW, height: dateH,
 		},
 		divider: displayRect{
-			top: height * 65 / 100, left: marginX,
+			top: dividerTop, left: marginX,
 			width: contentW, height: line,
 		},
 		climate: displayRect{
@@ -228,7 +233,8 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 		return fmt.Errorf("clock: divider: %w", err)
 	}
 	// Keep label and value together so the row reads as one centered status.
-	if err := d.drawTextRegion("climate", "Climate: Warm", options.FontPath, screenHeight*7/100, layout.climate, screenWidth, screenHeight, true); err != nil {
+	// Target ~9% of screen height (capped to the climate band).
+	if err := d.drawTextRegion("climate", "Climate: Warm", options.FontPath, screenHeight*9/100, layout.climate, screenWidth, screenHeight, true); err != nil {
 		return err
 	}
 
@@ -364,7 +370,8 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 }
 
 func (d *Device) drawDate(value string, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
-	return d.drawTextRegion("date", value, options.FontPath, screenHeight*6/100, layout.date, screenWidth, screenHeight, true)
+	// Target ~9% of screen height (capped to the date band).
+	return d.drawTextRegion("date", value, options.FontPath, screenHeight*9/100, layout.date, screenWidth, screenHeight, true)
 }
 
 func (d *Device) drawTextRegion(name, value, font string, fontSize int, box displayRect, screenWidth, screenHeight int, centered bool) error {
