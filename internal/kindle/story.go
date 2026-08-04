@@ -57,11 +57,11 @@ func newStoryLayout(width, height int, withImage bool) storyLayout {
 	line := max(2, height*2/1000)
 	return storyLayout{
 		image:       image,
-		genre:       displayRect{top: height * 7 / 100, left: contentLeft, width: contentWidth, height: height * 7 / 100},
-		genreRule:   displayRect{top: height * 16 / 100, left: contentLeft, width: min(width*13/100, contentWidth), height: line},
-		title:       displayRect{top: height * 20 / 100, left: contentLeft, width: contentWidth, height: height * 40 / 100},
-		description: displayRect{top: height * 63 / 100, left: contentLeft, width: contentWidth, height: height * 22 / 100},
-		source:      displayRect{top: height * 89 / 100, left: contentLeft, width: contentWidth, height: height * 5 / 100},
+		genre:       displayRect{top: height * 6 / 100, left: contentLeft, width: contentWidth, height: height * 8 / 100},
+		genreRule:   displayRect{top: height * 15 / 100, left: contentLeft, width: min(width*13/100, contentWidth), height: line},
+		title:       displayRect{top: height * 18 / 100, left: contentLeft, width: contentWidth, height: height * 42 / 100},
+		description: displayRect{top: height * 62 / 100, left: contentLeft, width: contentWidth, height: height * 24 / 100},
+		source:      displayRect{top: height * 88 / 100, left: contentLeft, width: contentWidth, height: height * 6 / 100},
 	}
 }
 
@@ -319,22 +319,22 @@ func (d *Device) drawStory(story Story, options StoryOptions, layout storyLayout
 	if genre == "" {
 		genre = "NEWS"
 	}
-	if err := d.drawTextRegion("story genre", genre, options.FontPath, height*4/100, layout.genre, width, height, false); err != nil {
+	if err := d.drawTextRegion("story genre", genre, options.FontPath, height*5/100, layout.genre, width, height, false); err != nil {
 		return err
 	}
 	if err := d.fillRect(layout.genreRule, true); err != nil {
 		return fmt.Errorf("story: genre rule: %w", err)
 	}
-	if err := d.drawTextRegion("story title", story.Title, clockTimeFont, height*15/100, layout.title, width, height, false); err != nil {
+	if err := d.drawTextRegion("story title", story.Title, clockTimeFont, height*18/100, layout.title, width, height, false); err != nil {
 		return err
 	}
 	if description := strings.TrimSpace(story.Description); description != "" {
-		if err := d.drawTextRegion("story description", description, options.FontPath, height*6/100, layout.description, width, height, false); err != nil {
+		if err := d.drawTextRegion("story description", description, options.FontPath, height*7/100, layout.description, width, height, false); err != nil {
 			return err
 		}
 	}
 	if source := storySourceLabel(story.Sources); source != "" {
-		if err := d.drawTextRegion("story source", source, options.FontPath, height*3/100, layout.source, width, height, false); err != nil {
+		if err := d.drawTextRegion("story source", source, options.FontPath, height*4/100, layout.source, width, height, false); err != nil {
 			return err
 		}
 	}
@@ -346,19 +346,19 @@ func (d *Device) drawStoryOverlay(story Story, options StoryOptions, layout stor
 	if genre == "" {
 		genre = "NEWS"
 	}
-	if err := d.drawOverlayTextRegion("story genre", genre, options.FontPath, height*4/100, layout.genre, width, height); err != nil {
+	if err := d.drawOverlayTextRegion("story genre", genre, options.FontPath, height*5/100, layout.genre, width, height); err != nil {
 		return err
 	}
-	if err := d.drawOverlayTextRegion("story title", story.Title, clockTimeFont, height*15/100, layout.title, width, height); err != nil {
+	if err := d.drawOverlayTextRegion("story title", story.Title, clockTimeFont, height*18/100, layout.title, width, height); err != nil {
 		return err
 	}
 	if description := strings.TrimSpace(story.Description); description != "" {
-		if err := d.drawOverlayTextRegion("story description", description, options.FontPath, height*6/100, layout.description, width, height); err != nil {
+		if err := d.drawOverlayTextRegion("story description", description, options.FontPath, height*7/100, layout.description, width, height); err != nil {
 			return err
 		}
 	}
 	if source := storySourceLabel(story.Sources); source != "" {
-		if err := d.drawOverlayTextRegion("story source", source, options.FontPath, height*3/100, layout.source, width, height); err != nil {
+		if err := d.drawOverlayTextRegion("story source", source, options.FontPath, height*4/100, layout.source, width, height); err != nil {
 			return err
 		}
 	}
