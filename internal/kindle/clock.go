@@ -94,6 +94,19 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	}
 }
 
+// ShowClockOnce paints the clock dashboard once and returns. It reuses the
+// same layout and rendering path as RunClock, while cancelling an internal
+// child context so RunClock exits after its first frame instead of waiting for
+// the next minute boundary.
+func (d *Device) ShowClockOnce(ctx context.Context, options ClockOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	onceCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	return d.RunClock(onceCtx, options)
+}
+
 type displayRect struct{ top, left, width, height int }
 
 // dashboardLayout keeps the display deliberately editorial:
