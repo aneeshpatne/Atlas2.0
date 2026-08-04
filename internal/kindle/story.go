@@ -9,8 +9,12 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+
+	_ "golang.org/x/image/webp"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -88,17 +92,23 @@ func (d *Device) RunStory(ctx context.Context, story Story, options StoryOptions
 	}
 	imageReady := false
 	if imageURL := firstStoryImageURL(story.Sources); imageURL != "" {
-		if uploader, ok := d.client.(interface{ Upload(string, []byte) error }); ok {
-			if data, err := options.FetchImage(ctx, imageURL); err == nil {
-				if data, err = prepareStoryBackground(data, width, height); err == nil {
-					imageReady = uploader.Upload(remoteStoryImage, data) == nil
-				}
-			}
+		uploader, ok := d.client.(interface{ Upload(string, []byte) error })
+		if !ok {
+			log.Printf("story: background image skipped: SSH client cannot upload files")
+		} else if data, err := options.FetchImage(ctx, imageURL); err != nil {
+			log.Printf("story: background image skipped: fetch %s: %v", imageURL, err)
+		} else if data, err = prepareStoryBackground(data, width, height); err != nil {
+			log.Printf("story: background image skipped: prepare: %v", err)
+		} else if err := uploader.Upload(remoteStoryImage, data); err != nil {
+			log.Printf("story: background image skipped: upload: %v", err)
+		} else {
+			imageReady = true
 		}
 	}
 	layout := newStoryLayout(width, height, imageReady)
 	if imageReady {
 		if err := d.drawStoryImage(layout.image); err != nil {
+			log.Printf("story: background image skipped: draw: %v", err)
 			layout = newStoryLayout(width, height, false)
 		}
 		_, _ = d.client.Run("rm -f " + remoteStoryImage)
@@ -129,10 +139,31 @@ func firstStoryImageURL(sources []StorySource) string {
 	return ""
 }
 
-func fetchStoryImage(ctx context.Context, url string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func fetchStoryImage(ctx context.Context, imageURL string) ([]byte, error) {
+	data, err := getStoryImageURL(ctx, imageURL)
+	if err == nil {
+		return data, nil
+	}
+	// CDNs often put resize/crop params in the query string and gate those
+	// transforms harder than the original asset. Retry the bare path once.
+	if stripped := stripURLQuery(imageURL); stripped != imageURL {
+		if retry, retryErr := getStoryImageURL(ctx, stripped); retryErr == nil {
+			return retry, nil
+		}
+	}
+	return nil, err
+}
+
+func getStoryImageURL(ctx context.Context, imageURL string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	// Browser-like headers: many news CDNs (Akamai, etc.) 403 bare Go clients.
+	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	request.Header.Set("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+	if referer := refererForImageURL(imageURL); referer != "" {
+		request.Header.Set("Referer", referer)
 	}
 	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
 	if err != nil {
@@ -150,7 +181,49 @@ func fetchStoryImage(ctx context.Context, url string) ([]byte, error) {
 	if len(data) == 0 || len(data) > maxImageBytes {
 		return nil, fmt.Errorf("image size must be between 1 byte and 12 MiB")
 	}
+	// Reject HTML error pages that some CDNs return with a 200.
+	if ctype := strings.ToLower(response.Header.Get("Content-Type")); ctype != "" &&
+		!strings.HasPrefix(ctype, "image/") && !strings.HasPrefix(ctype, "application/octet-stream") {
+		return nil, fmt.Errorf("image request returned non-image content-type %q", ctype)
+	}
+	if looksLikeHTML(data) {
+		return nil, fmt.Errorf("image request returned HTML instead of image data")
+	}
 	return data, nil
+}
+
+func stripURLQuery(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.RawQuery == "" {
+		return raw
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func refererForImageURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	// Prefer the publisher origin over the CDN host when the host looks like a CDN.
+	host := strings.ToLower(parsed.Host)
+	if strings.Contains(host, "ndtvimg") {
+		return "https://www.ndtv.com/"
+	}
+	return parsed.Scheme + "://" + parsed.Host + "/"
+}
+
+func looksLikeHTML(data []byte) bool {
+	trim := bytes.TrimSpace(data)
+	if len(trim) < 15 {
+		return false
+	}
+	prefix := bytes.ToLower(trim[:min(64, len(trim))])
+	return bytes.HasPrefix(prefix, []byte("<!doctype html")) ||
+		bytes.HasPrefix(prefix, []byte("<html")) ||
+		bytes.Contains(prefix, []byte("<html"))
 }
 
 // prepareStoryBackground turns a source image into a display-sized, grayscale

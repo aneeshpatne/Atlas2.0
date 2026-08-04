@@ -129,6 +129,22 @@ func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 	}
 }
 
+func TestStripURLQuery(t *testing.T) {
+	got := stripURLQuery("https://c.ndtvimg.com/a.png?im=FeatureCrop,width=1600")
+	if want := "https://c.ndtvimg.com/a.png"; got != want {
+		t.Fatalf("stripURLQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestLooksLikeHTML(t *testing.T) {
+	if !looksLikeHTML([]byte("<HTML><HEAD><TITLE>Access Denied</TITLE>")) {
+		t.Fatal("expected HTML detection")
+	}
+	if looksLikeHTML([]byte{0x89, 'P', 'N', 'G'}) {
+		t.Fatal("PNG signature should not look like HTML")
+	}
+}
+
 func TestPrepareStoryBackgroundDarkensAndFitsImage(t *testing.T) {
 	var input bytes.Buffer
 	source := image.NewGray(image.Rect(0, 0, 2, 2))
