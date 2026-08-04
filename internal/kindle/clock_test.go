@@ -49,6 +49,7 @@ func TestDrawClockUsesOneRegionalPartialRefresh(t *testing.T) {
 	for _, want := range []string{
 		"-b -B WHITE -k " + region,
 		"-b -B WHITE -C BLACK",
+		"regular=/mnt/us/fonts/InstrumentSerif-Regular.ttf",
 		"'9:41'",
 		"'AM'",
 		"-W GC16 -s " + region,
@@ -65,7 +66,7 @@ func TestDrawClockUsesOneRegionalPartialRefresh(t *testing.T) {
 func TestDrawClockCapsFontToBoxHeight(t *testing.T) {
 	runner := &recordingRunner{}
 	device := &Device{client: runner}
-	// 200px-tall box cannot host a 500px face; command must request ≤192px (96%).
+	// 200px-tall box cannot reliably host a larger face; FBInk may skip it.
 	layout := dashboardLayout{clock: displayRect{top: 20, left: 40, width: 1200, height: 200}}
 
 	err := device.drawClock(time.Date(2026, 8, 3, 16, 5, 0, 0, time.UTC), ClockOptions{
@@ -76,8 +77,8 @@ func TestDrawClockCapsFontToBoxHeight(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := runner.commands[0]
-	if !strings.Contains(command, "px=192") {
-		t.Fatalf("expected font capped to 96%% of box height (192), command:\n%s", command)
+	if !strings.Contains(command, "px=196") {
+		t.Fatalf("expected font capped to 98%% of box height (196), command:\n%s", command)
 	}
 	if strings.Contains(command, "px=500") {
 		t.Fatal("oversized font was not capped")
@@ -101,6 +102,29 @@ func TestDrawClockKeepsPeriodBesideTime(t *testing.T) {
 	// left/right margin pair (which would mean PM was drawn in the full clock box).
 	if !strings.Contains(command, "'9:41'") || !strings.Contains(command, "'AM'") {
 		t.Fatalf("missing time or period text:\n%s", command)
+	}
+}
+
+func TestDrawClockUsesSmallClosePeriod(t *testing.T) {
+	runner := &recordingRunner{}
+	device := &Device{client: runner}
+	layout := dashboardLayout{clock: displayRect{top: 20, left: 50, width: 1340, height: 480}}
+
+	if err := device.drawClock(time.Date(2026, 8, 3, 16, 5, 0, 0, time.UTC), ClockOptions{
+		FontPath: "/mnt/us/fonts/Clock.ttf",
+		FontSize: 400,
+	}, layout, 1448, 1072); err != nil {
+		t.Fatal(err)
+	}
+	command := runner.commands[0]
+	if !strings.Contains(command, "px=48") {
+		t.Fatalf("expected period to use a smaller 10%% face (48px), command:\n%s", command)
+	}
+	if !strings.Contains(command, "left=344,right=352") {
+		t.Fatalf("expected the main time box to be centered, command:\n%s", command)
+	}
+	if !strings.Contains(command, "left=1104") {
+		t.Fatalf("expected period to remain close to the time, command:\n%s", command)
 	}
 }
 
@@ -148,7 +172,7 @@ func TestNewDashboardLayoutHasFourMetricColumns(t *testing.T) {
 	}
 }
 
-func TestDrawStaticChromeIncludesPM25AndRules(t *testing.T) {
+func TestDrawStaticChromeIncludesClimateAndMetrics(t *testing.T) {
 	runner := &recordingRunner{}
 	device := &Device{client: runner}
 	layout := newDashboardLayout(1448, 1072)
@@ -159,11 +183,11 @@ func TestDrawStaticChromeIncludesPM25AndRules(t *testing.T) {
 	}
 	joined := strings.Join(runner.commands, "\n")
 	for _, want := range []string{
-		"Climate : Warm",
+		"Climate: Warm",
 		"TEMP",
-		"PRES",
-		"HUMI",
-		"PM25",
+		"PRESS",
+		"HUMID",
+		"PM2.5",
 		"24",
 		"1013",
 		"58",

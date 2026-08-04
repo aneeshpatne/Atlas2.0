@@ -10,6 +10,7 @@ import (
 )
 
 const defaultClockFont = "/usr/java/lib/fonts/Helvetica_LT_65_Medium.ttf"
+const clockTimeFont = "/mnt/us/fonts/InstrumentSerif-Regular.ttf"
 
 // ClockOptions controls the clock's appearance. Zero values select defaults
 // sized relative to the display, so the mode works across Kindle resolutions.
@@ -50,7 +51,7 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	// Prefer the largest face that still fits the clock band. drawClock may
 	// shrink slightly for long times ("12:59") so AM/PM stays visible.
 	if options.FontSize == 0 {
-		options.FontSize = layout.clock.height * 96 / 100
+		options.FontSize = layout.clock.height * 98 / 100
 	}
 	if options.FontSize < 1 {
 		return fmt.Errorf("clock: font size must be positive")
@@ -95,14 +96,14 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 
 type displayRect struct{ top, left, width, height int }
 
-// dashboardLayout matches the ChatGPT mockup:
+// dashboardLayout keeps the display deliberately editorial:
 //
 //	[ large centered time + PM ]
 //	        ——— solid rule ———
 //	      Monday, August 3
 //	····························
-//	      Climate : Warm
-//	TEMP | PRESSURE | HUMIDITY | PM2.5
+//	          Climate: Warm
+//	TEMP | PRESS | HUMID | PM2.5
 type dashboardLayout struct {
 	clock, clockRule, date, divider, climate displayRect
 	metrics                                  [4]displayRect
@@ -112,65 +113,70 @@ type dashboardLayout struct {
 
 func newDashboardLayout(width, height int) dashboardLayout {
 	// FBInk rejects 1px refresh regions as "bogus empty" (softlock guard).
-	line := max(2, height*3/1000)
-	marginX := width * 4 / 100
+	line := max(2, height*2/1000)
+	marginX := width * 5 / 100
 	contentW := width - 2*marginX
 
-	// Four equal metric columns with gutters wide enough for a ≥2px divider.
-	divW := max(2, width*3/1000)
-	gutter := max(divW+4, width*8/1000)
+	// Four equal metric columns with quiet gutters and a short divider. The
+	// extra whitespace makes the lower strip feel lighter than the hero clock.
+	divW := max(2, width*2/1000)
+	gutter := max(divW+4, width*6/1000)
 	colW := (contentW - 3*gutter) / 4
 
-	// Metrics strip is tall enough for large reading digits under short labels.
-	metricsTop := height * 72 / 100
+	// Metrics strip is tall enough for large reading digits under compact labels,
+	// while preserving a little breathing room at the bottom of the display.
+	metricsTop := height * 73 / 100
 	metricsH := height * 26 / 100
-	// Label band is short; rule sits immediately under it.
-	ruleTop := metricsTop + metricsH*20 / 100
+	// Label band is intentionally short; the rule is a typographic underline.
+	ruleTop := metricsTop + metricsH*19/100
 	var metrics [4]displayRect
 	var metricRules [4]displayRect
 	var metricDividers [3]displayRect
 	for i := 0; i < 4; i++ {
 		left := marginX + i*(colW+gutter)
 		metrics[i] = displayRect{top: metricsTop, left: left, width: colW, height: metricsH}
-		ruleW := max(2, colW*55/100)
+		ruleW := max(2, colW*48/100)
 		metricRules[i] = displayRect{
 			top: ruleTop, left: left + (colW-ruleW)/2,
 			width: ruleW, height: line,
 		}
 		if i < 3 {
 			metricDividers[i] = displayRect{
-				top:    metricsTop + metricsH*8/100,
+				top:    metricsTop + metricsH*16/100,
 				left:   left + colW + (gutter-divW)/2,
 				width:  divW,
-				height: max(2, metricsH*84/100),
+				height: max(2, metricsH*68/100),
 			}
 		}
 	}
 
-	ruleW := width * 42 / 100
-	// Near-full width for the clock so wide faces ("12:59") stay huge.
-	clockMargin := width * 2 / 100
+	ruleW := width * 38 / 100
+	// Keep the hero clock broad so wide faces ("12:59") stay generous, but
+	// leave a visible edge margin so the composition does not touch the bezel.
+	clockMargin := width * 1 / 100
+	climateTop := height * 66 / 100
+	climateH := height * 6 / 100
 	return dashboardLayout{
-		// Large clock band; metrics take a bigger share for big digits.
+		// Let the time dominate the display while retaining a slim bezel margin.
 		clock: displayRect{
-			top: height * 1 / 100, left: clockMargin,
-			width: width - 2*clockMargin, height: height * 48 / 100,
+			top: height * 0 / 100, left: clockMargin,
+			width: width - 2*clockMargin, height: height * 59 / 100,
 		},
 		clockRule: displayRect{
-			top: height * 50 / 100, left: (width - ruleW) / 2,
+			top: height * 59 / 100, left: (width - ruleW) / 2,
 			width: ruleW, height: line,
 		},
 		date: displayRect{
-			top: height * 51 / 100, left: marginX,
+			top: height * 60 / 100, left: marginX,
 			width: contentW, height: height * 5 / 100,
 		},
 		divider: displayRect{
-			top: height * 57 / 100, left: marginX,
+			top: height * 65 / 100, left: marginX,
 			width: contentW, height: line,
 		},
 		climate: displayRect{
-			top: height * 59 / 100, left: marginX,
-			width: contentW, height: height * 7 / 100,
+			top: climateTop, left: marginX,
+			width: contentW, height: climateH,
 		},
 		metrics:        metrics,
 		metricRules:    metricRules,
@@ -200,7 +206,7 @@ var fbinkScreenSize = regexp.MustCompile(`screenWidth=([0-9]+);screenHeight=([0-
 const fbinkPath = "/mnt/us/usbnet/bin/fbink"
 
 // drawStaticChrome paints the non-clock chrome once at startup: rules,
-// climate line, metric labels/placeholders, and column dividers.
+// climate row, metric labels/placeholders, and column dividers.
 func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
 	if err := d.fillRect(layout.clockRule, true); err != nil {
 		return fmt.Errorf("clock: clock rule: %w", err)
@@ -208,7 +214,8 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 	if err := d.drawDottedLine(layout.divider); err != nil {
 		return fmt.Errorf("clock: divider: %w", err)
 	}
-	if err := d.drawTextRegion("climate", "Climate : Warm", options.FontPath, screenHeight*7/100, layout.climate, screenWidth, screenHeight, true); err != nil {
+	// Keep label and value together so the row reads as one centered status.
+	if err := d.drawTextRegion("climate", "Climate: Warm", options.FontPath, screenHeight*7/100, layout.climate, screenWidth, screenHeight, true); err != nil {
 		return err
 	}
 
@@ -221,18 +228,18 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 		unit   string
 	}{
 		{"temperature", "TEMP", "24", "°C"},
-		{"pressure", "PRES", "1013", "hPa"},
-		{"humidity", "HUMI", "58", "%"},
-		{"pm25", "PM25", "12", "µg/m³"},
+		{"pressure", "PRESS", "1013", "hPa"},
+		{"humidity", "HUMID", "58", "%"},
+		{"pm25", "PM2.5", "12", "µg/m³"},
 	}
-	labelSize := screenHeight * 3 / 100
-	unitSize := screenHeight * 3 / 100
+	labelSize := screenHeight * 25 / 1000
+	unitSize := screenHeight * 24 / 1000
 	for i, metric := range metrics {
 		box := layout.metrics[i]
 		// Compact label + rule; most of the column is the reading.
 		labelBox := displayRect{
 			top: box.top, left: box.left,
-			width: box.width, height: box.height * 18 / 100,
+			width: box.width, height: box.height * 16 / 100,
 		}
 		if err := d.drawTextRegion(metric.name+" label", metric.label, options.FontPath, labelSize, labelBox, screenWidth, screenHeight, true); err != nil {
 			return err
@@ -242,10 +249,10 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 		}
 		// Huge digits — size from the number band, then fit column width.
 		numberBox := displayRect{
-			top: box.top + box.height*26/100, left: box.left,
-			width: box.width, height: box.height * 48 / 100,
+			top: box.top + box.height*25/100, left: box.left,
+			width: box.width, height: box.height * 46 / 100,
 		}
-		numberSize := numberBox.height * 92 / 100
+		numberSize := numberBox.height * 94 / 100
 		// ~0.58em per digit; shrink if the reading is wider than the column.
 		if glyphs := len([]rune(metric.number)); glyphs > 0 {
 			if maxByWidth := numberBox.width * 100 / (58 * glyphs); numberSize > maxByWidth {
@@ -257,7 +264,7 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 		}
 		unitBox := displayRect{
 			top: box.top + box.height*76/100, left: box.left,
-			width: box.width, height: box.height * 20 / 100,
+			width: box.width, height: box.height * 18 / 100,
 		}
 		if err := d.drawTextRegion(metric.name+" unit", metric.unit, options.FontPath, unitSize, unitBox, screenWidth, screenHeight, true); err != nil {
 			return err
@@ -279,11 +286,10 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 	periodText := now.Format("PM")
 	glyphs := len([]rune(timeText))
 
-	// Compact PM slot on the right; the remaining band is all for the digits.
-	// Capitals need ~0.9em each, so 2.3em covers "AM"/"PM" without clipping M.
-	periodSize := max(1, box.height*14/100)
-	periodWidth := periodSize * 23 / 10
-	gap := max(box.width*1/100, 10)
+	// Keep the period close and quiet: the main time should own the hierarchy.
+	periodSize := max(1, box.height*10/100)
+	periodWidth := periodSize * 20 / 10
+	gap := max(box.width*6/1000, 6)
 	timeAvailW := box.width - gap - periodWidth
 	if timeAvailW < box.width/2 {
 		timeAvailW = box.width / 2
@@ -291,9 +297,10 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 	}
 
 	// Largest face that fits both the tall clock band and the available width.
-	// Helvetica digits are ~0.55em; keep a small pad so the last digit is not cut.
-	fontByHeight := box.height * 96 / 100
-	fontByWidth := timeAvailW * 100 / (55*glyphs + 8)
+	// Instrument Serif digits are roughly 0.44em wide; keep a small pad so the
+	// last digit is not cut while allowing the face to grow into the wide band.
+	fontByHeight := box.height * 98 / 100
+	fontByWidth := timeAvailW * 100 / (44*glyphs + 8)
 	fontSize := options.FontSize
 	if fontSize > fontByHeight {
 		fontSize = fontByHeight
@@ -305,27 +312,27 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 		fontSize = 1
 	}
 
-	timeWidth := min(timeAvailW, fontSize*55*glyphs/100+fontSize*12/100)
-	// Group time + PM and center the pair in the clock band.
-	groupWidth := timeWidth + gap + periodWidth
-	if groupWidth > box.width {
-		groupWidth = box.width
-		timeWidth = max(fontSize, groupWidth-gap-periodWidth)
+	timeWidth := min(timeAvailW, fontSize*44*glyphs/100+fontSize*12/100)
+	// Center the time itself—not the time-plus-period group—so the dominant
+	// digits always sit on the display axis, including during 10–12 o'clock.
+	timeLeft := box.left + (box.width-timeWidth)/2
+	periodLeft := timeLeft + timeWidth + gap
+	if maxPeriodLeft := box.left + box.width - periodWidth; periodLeft > maxPeriodLeft {
+		periodLeft = maxPeriodLeft
 	}
-	groupLeft := box.left + (box.width-groupWidth)/2
 
 	timeBox := displayRect{
-		top: box.top, left: groupLeft,
+		top: box.top, left: timeLeft,
 		width: timeWidth, height: box.height,
 	}
 	periodBox := displayRect{
 		top:    box.top + box.height*22/100,
-		left:   groupLeft + timeWidth + gap,
+		left:   periodLeft,
 		width:  periodWidth,
 		height: box.height * 42 / 100,
 	}
 	// padding=NONE lets px fill nearly the full type region height.
-	timeSpec := typeSpecNoPad(options.FontPath, fontSize, timeBox, screenWidth, screenHeight)
+	timeSpec := typeSpecNoPad(clockTimeFont, fontSize, timeBox, screenWidth, screenHeight)
 	periodSpec := typeSpecNoPad(options.FontPath, periodSize, periodBox, screenWidth, screenHeight)
 
 	// Both writes are framebuffer-only. The final command refreshes exactly the
@@ -344,7 +351,7 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 }
 
 func (d *Device) drawDate(value string, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
-	return d.drawTextRegion("date", value, options.FontPath, screenHeight*5/100, layout.date, screenWidth, screenHeight, true)
+	return d.drawTextRegion("date", value, options.FontPath, screenHeight*6/100, layout.date, screenWidth, screenHeight, true)
 }
 
 func (d *Device) drawTextRegion(name, value, font string, fontSize int, box displayRect, screenWidth, screenHeight int, centered bool) error {
