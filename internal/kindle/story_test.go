@@ -81,6 +81,35 @@ func TestStorySourceLabelDeduplicatesDomains(t *testing.T) {
 	}
 }
 
+func TestRunStoryUsesGenreFallbackWhenNoOGURL(t *testing.T) {
+	runner := &imageRecordingRunner{recordingRunner: recordingRunner{output: "screenWidth=1448;screenHeight=1072"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var fallback bytes.Buffer
+	bg := image.NewGray(image.Rect(0, 0, 2, 2))
+	bg.SetGray(0, 0, color.Gray{Y: 180})
+	if err := png.Encode(&fallback, bg); err != nil {
+		t.Fatal(err)
+	}
+
+	err := (&Device{client: runner}).RunStory(ctx, Story{
+		Title:   "No og image",
+		Genre:   "India",
+		Sources: []StorySource{{Domain: "example"}},
+	}, StoryOptions{FallbackImage: fallback.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.uploadedPath != remoteStoryImage || len(runner.uploadedData) == 0 {
+		t.Fatalf("expected genre fallback upload, got (%q, %d bytes)", runner.uploadedPath, len(runner.uploadedData))
+	}
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "-q -w -W GC16 -i '/tmp/atlas-story-image'") {
+		t.Fatalf("expected fallback background draw:\n%s", joined)
+	}
+}
+
 func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 	runner := &imageRecordingRunner{recordingRunner: recordingRunner{output: "screenWidth=1448;screenHeight=1072"}}
 	ctx, cancel := context.WithCancel(context.Background())

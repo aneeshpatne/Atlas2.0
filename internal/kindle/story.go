@@ -40,6 +40,9 @@ type StorySource struct {
 type StoryOptions struct {
 	FontPath   string
 	FetchImage func(context.Context, string) ([]byte, error)
+	// FallbackImage is raw image bytes (e.g. genre asset from assets/genres)
+	// used when no OG image is available or fetch/prepare fails.
+	FallbackImage []byte
 }
 
 type storyLayout struct {
@@ -91,18 +94,37 @@ func (d *Device) RunStory(ctx context.Context, story Story, options StoryOptions
 		return err
 	}
 	imageReady := false
-	if imageURL := firstStoryImageURL(story.Sources); imageURL != "" {
-		uploader, ok := d.client.(interface{ Upload(string, []byte) error })
-		if !ok {
-			log.Printf("story: background image skipped: SSH client cannot upload files")
-		} else if data, err := options.FetchImage(ctx, imageURL); err != nil {
-			log.Printf("story: background image skipped: fetch %s: %v", imageURL, err)
-		} else if data, err = prepareStoryBackground(data, width, height); err != nil {
-			log.Printf("story: background image skipped: prepare: %v", err)
-		} else if err := uploader.Upload(remoteStoryImage, data); err != nil {
-			log.Printf("story: background image skipped: upload: %v", err)
+	uploader, canUpload := d.client.(interface{ Upload(string, []byte) error })
+	if !canUpload {
+		log.Printf("story: background image skipped: SSH client cannot upload files")
+	} else {
+		// Prefer Open Graph image from sources (ogurl).
+		if imageURL := firstStoryImageURL(story.Sources); imageURL != "" {
+			if data, err := options.FetchImage(ctx, imageURL); err != nil {
+				log.Printf("story: ogurl background skipped: fetch %s: %v", imageURL, err)
+			} else if data, err = prepareStoryBackground(data, width, height); err != nil {
+				log.Printf("story: ogurl background skipped: prepare: %v", err)
+			} else if err := uploader.Upload(remoteStoryImage, data); err != nil {
+				log.Printf("story: ogurl background skipped: upload: %v", err)
+			} else {
+				imageReady = true
+			}
 		} else {
-			imageReady = true
+			log.Printf("story: no ogurl on sources for %q; will try genre fallback", story.Title)
+		}
+		// Fall back to genre asset (assets/genres) so every story still has a photo bg.
+		if !imageReady && len(options.FallbackImage) > 0 {
+			if data, err := prepareStoryBackground(options.FallbackImage, width, height); err != nil {
+				log.Printf("story: genre fallback background skipped: prepare: %v", err)
+			} else if err := uploader.Upload(remoteStoryImage, data); err != nil {
+				log.Printf("story: genre fallback background skipped: upload: %v", err)
+			} else {
+				log.Printf("story: using genre fallback background for %q", story.Title)
+				imageReady = true
+			}
+		}
+		if !imageReady {
+			log.Printf("story: no background for %q (missing ogurl and genre asset)", story.Title)
 		}
 	}
 	layout := newStoryLayout(width, height, imageReady)
