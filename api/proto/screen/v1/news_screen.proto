@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package screen.v1;
+
+option go_package = "github.com/aneeshpatne/atlas/gen/screen/v1;screenv1";
+
+import "screen/v1/news_item.proto";
+
+service NewsScreenService {
+  rpc AddNews(NewsItem) returns (CommandAck);
+  rpc AddAlert(Alert) returns (CommandAck);
+}
+
+message Alert {
+  string color = 1;
+  string message = 2;
+}
+
+message CommandAck {
+  bool accepted = 1;
+  string operation_id = 2;
+  string state = 3;
+}
