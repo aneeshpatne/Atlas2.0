@@ -160,8 +160,27 @@ func TestPrepareStoryBackgroundDarkensAndFitsImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// y=0 → yPct=0 → scrim 0; highlight roll-off: 200 → 150+(50*45/100)=172
+	// then *50/100 = 86; * (100-0)/100 = 86
 	gray := color.GrayModel.Convert(decoded.At(0, 0)).(color.Gray)
-	if gray.Y != 110 {
-		t.Fatalf("darkened pixel = %d, want 110", gray.Y)
+	if gray.Y != 86 {
+		t.Fatalf("darkened pixel = %d, want 86", gray.Y)
+	}
+	// Mid-frame should apply the copy-band scrim and be darker still.
+	mid := color.GrayModel.Convert(decoded.At(0, 1)).(color.Gray)
+	if mid.Y >= gray.Y {
+		t.Fatalf("mid-frame pixel %d should be darker than top-edge %d", mid.Y, gray.Y)
+	}
+}
+
+func TestStoryScrimPercentPeaksInCopyBand(t *testing.T) {
+	if storyScrimPercent(0) != 0 {
+		t.Fatalf("top edge scrim = %d, want 0", storyScrimPercent(0))
+	}
+	if storyScrimPercent(50) != storyScrimPeakPercent {
+		t.Fatalf("mid scrim = %d, want %d", storyScrimPercent(50), storyScrimPeakPercent)
+	}
+	if storyScrimPercent(99) >= storyScrimPercent(50) {
+		t.Fatalf("bottom scrim should ease off from mid")
 	}
 }

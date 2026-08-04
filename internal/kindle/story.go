@@ -226,6 +226,29 @@ func looksLikeHTML(data []byte) bool {
 		bytes.Contains(prefix, []byte("<html"))
 }
 
+// storyBackgroundLumaPercent is the global dim applied to OG images before the
+// vertical text scrim. Kept low enough for white overlay type on e-ink.
+const storyBackgroundLumaPercent = 50
+
+// storyScrimPeakPercent is the extra mid-frame darkening over the copy stack.
+const storyScrimPeakPercent = 12
+
+// storyScrimPercent returns extra darkening (0–100) for a vertical position so
+// the genre/title/description bands stay a bit darker than the photo edges.
+func storyScrimPercent(yPct int) int {
+	switch {
+	case yPct < 8:
+		return yPct * storyScrimPeakPercent / 8 // ramp in from the top edge
+	case yPct < 82:
+		return storyScrimPeakPercent // steady veil over the main copy stack
+	case yPct < 100:
+		// Ease off toward the bottom so the photo isn't a flat black slab.
+		return storyScrimPeakPercent * (100 - yPct) / 18
+	default:
+		return 0
+	}
+}
+
 // prepareStoryBackground turns a source image into a display-sized, grayscale
 // PNG with its luminance reduced enough for white overlay text to remain clear.
 func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
@@ -255,12 +278,29 @@ func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
 
 	background := image.NewGray(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
+		// Soft vertical scrim: a little extra darkening through the title and
+		// description bands so white overlay copy stays readable on bright faces.
+		yPct := y * 100 / height
+		scrim := storyScrimPercent(yPct)
 		for x := 0; x < width; x++ {
 			srcX := srcBounds.Min.X + x*srcBounds.Dx()/width
 			srcY := srcBounds.Min.Y + y*srcBounds.Dy()/height
 			gray := color.GrayModel.Convert(source.At(srcX, srcY)).(color.Gray)
-			// Retain detail while making the background substantially darker.
-			background.SetGray(x, y, color.Gray{Y: uint8(int(gray.Y) * 55 / 100)})
+			luma := int(gray.Y)
+			// Soft highlight roll-off so bright regions don't fight white type.
+			if luma > 150 {
+				luma = 150 + (luma-150)*45/100
+			}
+			// Base dim, then row scrim (both keep photo structure visible).
+			luma = luma * storyBackgroundLumaPercent / 100
+			luma = luma * (100 - scrim) / 100
+			if luma < 0 {
+				luma = 0
+			}
+			if luma > 255 {
+				luma = 255
+			}
+			background.SetGray(x, y, color.Gray{Y: uint8(luma)})
 		}
 	}
 
