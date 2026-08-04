@@ -227,11 +227,17 @@ func looksLikeHTML(data []byte) bool {
 }
 
 // storyBackgroundLumaPercent is the global dim applied to OG images before the
-// vertical text scrim. Kept low enough for white overlay type on e-ink.
-const storyBackgroundLumaPercent = 50
+// vertical text scrim. 100 leaves source luminance unchanged; lower for e-ink
+// type contrast (e.g. 50).
+const storyBackgroundLumaPercent = 70
 
 // storyScrimPeakPercent is the extra mid-frame darkening over the copy stack.
-const storyScrimPeakPercent = 12
+// 0 disables the scrim.
+const storyScrimPeakPercent = 14
+
+// storyHighlightKeepPercent controls highlight roll-off above luma 150.
+// 100 keeps highlights as-is; lower values (e.g. 45) compress them.
+const storyHighlightKeepPercent = 65
 
 // storyScrimPercent returns extra darkening (0–100) for a vertical position so
 // the genre/title/description bands stay a bit darker than the photo edges.
@@ -289,7 +295,7 @@ func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
 			luma := int(gray.Y)
 			// Soft highlight roll-off so bright regions don't fight white type.
 			if luma > 150 {
-				luma = 150 + (luma-150)*45/100
+				luma = 150 + (luma-150)*storyHighlightKeepPercent/100
 			}
 			// Base dim, then row scrim (both keep photo structure visible).
 			luma = luma * storyBackgroundLumaPercent / 100

@@ -148,7 +148,11 @@ func TestLooksLikeHTML(t *testing.T) {
 func TestPrepareStoryBackgroundDarkensAndFitsImage(t *testing.T) {
 	var input bytes.Buffer
 	source := image.NewGray(image.Rect(0, 0, 2, 2))
-	source.SetGray(0, 0, color.Gray{Y: 200})
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			source.SetGray(x, y, color.Gray{Y: 200})
+		}
+	}
 	if err := png.Encode(&input, source); err != nil {
 		t.Fatal(err)
 	}
@@ -160,11 +164,11 @@ func TestPrepareStoryBackgroundDarkensAndFitsImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// y=0 → yPct=0 → scrim 0; highlight roll-off: 200 → 150+(50*45/100)=172
-	// then *50/100 = 86; * (100-0)/100 = 86
+	// y=0 → scrim 0; highlight roll-off: 200 → 150+(50*65/100)=182
+	// then *70/100 = 127; * (100-0)/100 = 127
 	gray := color.GrayModel.Convert(decoded.At(0, 0)).(color.Gray)
-	if gray.Y != 86 {
-		t.Fatalf("darkened pixel = %d, want 86", gray.Y)
+	if gray.Y != 127 {
+		t.Fatalf("darkened pixel = %d, want 127", gray.Y)
 	}
 	// Mid-frame should apply the copy-band scrim and be darker still.
 	mid := color.GrayModel.Convert(decoded.At(0, 1)).(color.Gray)
