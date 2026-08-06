@@ -1,10 +1,17 @@
 package kindle
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 )
+
+type fixedMetrics struct{}
+
+func (fixedMetrics) ReadMetrics(context.Context) (MetricsSnapshot, error) {
+	return MetricsSnapshot{Climate: "Clear", Temperature: "27", Pressure: "1008", Humidity: "54", PM25: "9"}, nil
+}
 
 type recordingRunner struct {
 	output   string
@@ -183,13 +190,13 @@ func TestDrawStaticChromeIncludesClimateAndMetrics(t *testing.T) {
 	}
 	joined := strings.Join(runner.commands, "\n")
 	for _, want := range []string{
-		"Climate: Warm",
+		"Climate: --",
 		"TEMP",
 		"PRESS",
 		"HUMID",
 		"PM2.5",
 		"24",
-		"1013",
+		"--",
 		"58",
 		"12",
 		"°C",
@@ -204,8 +211,35 @@ func TestDrawStaticChromeIncludesClimateAndMetrics(t *testing.T) {
 	}
 }
 
+func TestDrawStaticChromeUsesMetricsProvider(t *testing.T) {
+	runner := &recordingRunner{}
+	device := &Device{client: runner}
+	layout := newDashboardLayout(1448, 1072)
+	if err := device.drawStaticChrome(ClockOptions{FontPath: "/font.ttf", Metrics: fixedMetrics{}}, layout, 1448, 1072); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.commands, "\n")
+	for _, want := range []string{"Climate: Clear", "'27'", "'1008'", "'54'", "'9'"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("metrics output missing %q", want)
+		}
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	if got, want := shellQuote("it's"), `'it'\''s'`; got != want {
 		t.Fatalf("shellQuote() = %q, want %q", got, want)
+	}
+}
+
+func TestShowTitleShellQuotesUntrustedText(t *testing.T) {
+	runner := &recordingRunner{}
+	device := &Device{client: runner}
+	payload := "hello'; $(touch /tmp/pwned); `id`; echo '"
+	if err := device.ShowTitle(payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 1 || !strings.Contains(runner.commands[0], "-- "+shellQuote(payload)) {
+		t.Fatalf("title was not passed as one quoted argument: %v", runner.commands)
 	}
 }

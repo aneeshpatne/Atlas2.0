@@ -9,6 +9,19 @@ import (
 
 const defaultMiscBackdrop = "misc"
 
+// ValidateBackdrops verifies that the directory can provide the required
+// fallback before the service starts.
+func ValidateBackdrops(dir string) error {
+	index, err := indexBackdrops(dir)
+	if err != nil {
+		return err
+	}
+	if _, ok := index[defaultMiscBackdrop]; !ok {
+		return fmt.Errorf("no %s fallback image in %s", defaultMiscBackdrop, dir)
+	}
+	return nil
+}
+
 // loadBackdrop finds a genre image under dir (case-insensitive stem match).
 // Falls back to misc.* when no file matches the genre.
 // Supported extensions: .png, .jpg, .jpeg, .webp.

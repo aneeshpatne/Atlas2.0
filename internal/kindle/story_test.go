@@ -3,17 +3,28 @@ package kindle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"strings"
 	"testing"
+	"time"
 )
 
 type imageRecordingRunner struct {
 	recordingRunner
 	uploadedPath string
 	uploadedData []byte
+	cancel       context.CancelFunc
+}
+
+func (r *imageRecordingRunner) Run(command string) (string, error) {
+	output, err := r.recordingRunner.Run(command)
+	if r.cancel != nil && strings.Contains(command, "-q -W GC16 -s top=0") {
+		r.cancel()
+	}
+	return output, err
 }
 
 func (r *imageRecordingRunner) Upload(path string, data []byte) error {
@@ -26,7 +37,7 @@ func TestRunStoryCleansScreenOnStartAndDrawsPayload(t *testing.T) {
 	runner := &recordingRunner{output: "screenWidth=1448;screenHeight=1072"}
 	device := &Device{client: runner}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	time.AfterFunc(250*time.Millisecond, cancel)
 
 	err := device.RunStory(ctx, Story{
 		Title:       "Lok Sabha clears Supreme Court judge bill",
@@ -74,6 +85,19 @@ func TestRunStoryRequiresTitleBeforeChangingDevice(t *testing.T) {
 	}
 }
 
+func TestRunStoryHonorsAlreadyCancelledContext(t *testing.T) {
+	runner := &recordingRunner{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := (&Device{client: runner}).RunStory(ctx, Story{Title: "cancelled"}, StoryOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunStory error = %v, want context cancellation", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("cancelled story issued commands: %v", runner.commands)
+	}
+}
+
 func TestStorySourceLabelDeduplicatesDomains(t *testing.T) {
 	got := storySourceLabel([]StorySource{{Domain: "livelaw"}, {Domain: "livelaw"}, {Domain: "barandbench"}})
 	if want := "SOURCE  ·  livelaw  /  barandbench"; got != want {
@@ -84,7 +108,7 @@ func TestStorySourceLabelDeduplicatesDomains(t *testing.T) {
 func TestRunStoryUsesGenreFallbackWhenNoOGURL(t *testing.T) {
 	runner := &imageRecordingRunner{recordingRunner: recordingRunner{output: "screenWidth=1448;screenHeight=1072"}}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	runner.cancel = cancel
 
 	var fallback bytes.Buffer
 	bg := image.NewGray(image.Rect(0, 0, 2, 2))
@@ -113,7 +137,7 @@ func TestRunStoryUsesGenreFallbackWhenNoOGURL(t *testing.T) {
 func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 	runner := &imageRecordingRunner{recordingRunner: recordingRunner{output: "screenWidth=1448;screenHeight=1072"}}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	runner.cancel = cancel
 
 	err := (&Device{client: runner}).RunStory(ctx, Story{
 		Title: "A story with an image",
@@ -145,8 +169,9 @@ func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 	for _, want := range []string{
 		"-q -w -W GC16 -i '/tmp/atlas-story-image'",
 		"x=0,y=0,w=1448,h=1072,dither",
-		"rm -f /tmp/atlas-story-image",
-		"-q -w -W GC16 -O -C WHITE -B BLACK",
+		"rm -f '/tmp/atlas-story-image'",
+		"-q -b -O -C WHITE -B BLACK",
+		"-q -W GC16 -s top=0,left=0,width=1448,height=1072",
 		"left=101",
 	} {
 		if !strings.Contains(joined, want) {
@@ -155,6 +180,32 @@ func TestRunStoryDownloadsUploadsAndRendersOGImage(t *testing.T) {
 	}
 	if strings.Contains(joined, "-m -M") {
 		t.Fatal("overlay text should use absolute region positioning")
+	}
+}
+
+func TestRunStoryCachesPreparedOGImage(t *testing.T) {
+	runner := &imageRecordingRunner{recordingRunner: recordingRunner{output: "screenWidth=100;screenHeight=80"}}
+	device := &Device{client: runner}
+	fetches := 0
+	options := StoryOptions{FetchImage: func(_ context.Context, _ string) ([]byte, error) {
+		fetches++
+		var encoded bytes.Buffer
+		if err := png.Encode(&encoded, image.NewGray(image.Rect(0, 0, 4, 4))); err != nil {
+			t.Fatal(err)
+		}
+		return encoded.Bytes(), nil
+	}}
+	story := Story{Title: "Repeated story", Sources: []StorySource{{OGURL: "https://example.com/repeated.jpg"}}}
+
+	for range 2 {
+		ctx, cancel := context.WithCancel(context.Background())
+		runner.cancel = cancel
+		if err := device.RunStory(ctx, story, options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fetches != 1 {
+		t.Fatalf("image fetches = %d, want 1", fetches)
 	}
 }
 
@@ -171,6 +222,17 @@ func TestLooksLikeHTML(t *testing.T) {
 	}
 	if looksLikeHTML([]byte{0x89, 'P', 'N', 'G'}) {
 		t.Fatal("PNG signature should not look like HTML")
+	}
+}
+
+func TestValidatePublicImageURLRejectsLocalAddresses(t *testing.T) {
+	for _, raw := range []string{"http://example.com/image.jpg", "https://127.0.0.1/image.jpg", "https://[::1]/image.jpg", "https://user:pass@example.com/image.jpg"} {
+		if err := validatePublicImageURL(context.Background(), raw); err == nil {
+			t.Errorf("validatePublicImageURL(%q) unexpectedly succeeded", raw)
+		}
+	}
+	if err := validateImageURL(context.Background(), "https://127.0.0.1/image.jpg", true); err != nil {
+		t.Fatalf("explicit private-image policy rejected local URL: %v", err)
 	}
 }
 
@@ -193,16 +255,35 @@ func TestPrepareStoryBackgroundDarkensAndFitsImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// y=0 → scrim 0; highlight roll-off: 200 → 150+(50*65/100)=182
-	// then *70/100 = 127; * (100-0)/100 = 127
+	// A flat image uses the full source range but is still bounded for e-ink.
 	gray := color.GrayModel.Convert(decoded.At(0, 0)).(color.Gray)
-	if gray.Y != 127 {
-		t.Fatalf("darkened pixel = %d, want 127", gray.Y)
+	if gray.Y <= storyShadowFloor || gray.Y >= storyHighlightCeiling {
+		t.Fatalf("tone-mapped pixel = %d, want inside (%d, %d)", gray.Y, storyShadowFloor, storyHighlightCeiling)
 	}
 	// Mid-frame should apply the copy-band scrim and be darker still.
 	mid := color.GrayModel.Convert(decoded.At(0, 1)).(color.Gray)
 	if mid.Y >= gray.Y {
 		t.Fatalf("mid-frame pixel %d should be darker than top-edge %d", mid.Y, gray.Y)
+	}
+}
+
+func TestEinkTonePreservesShadowDetailAndCapsHighlights(t *testing.T) {
+	if got := einkTone(0, 0, 255); got != storyShadowFloor {
+		t.Fatalf("black = %d, want shadow floor %d", got, storyShadowFloor)
+	}
+	if got := einkTone(255, 0, 255); got != storyHighlightCeiling {
+		t.Fatalf("white = %d, want highlight ceiling %d", got, storyHighlightCeiling)
+	}
+	shadow, midtone := einkTone(20, 0, 255), einkTone(100, 0, 255)
+	if shadow <= storyShadowFloor || midtone <= shadow {
+		t.Fatalf("tone curve lost detail: floor=%d shadow=%d midtone=%d", storyShadowFloor, shadow, midtone)
+	}
+}
+
+func TestStoryScrimLeavesWhiteTextContrast(t *testing.T) {
+	copyBandPeak := einkTone(255, 0, 255) * (100 - storyScrimPeakPercent) / 100
+	if copyBandPeak > 110 {
+		t.Fatalf("copy-band background peak = %d, want <= 110 for white text", copyBandPeak)
 	}
 }
 

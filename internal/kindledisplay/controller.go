@@ -2,11 +2,9 @@ package kindledisplay
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
-	screenv1 "github.com/aneeshpatne/atlas/gen/screen/v1"
 	"github.com/aneeshpatne/atlas/internal/alert"
 	"github.com/aneeshpatne/atlas/internal/display"
 	"github.com/aneeshpatne/atlas/internal/kindle"
@@ -15,6 +13,7 @@ import (
 type Controller struct {
 	device   *kindle.Device
 	location *time.Location
+	metrics  kindle.MetricsProvider
 	mu       sync.Mutex
 	running  bool
 }
@@ -22,16 +21,20 @@ type Controller struct {
 func New(device *kindle.Device) *Controller { return NewWithLocation(device, time.Local) }
 
 func NewWithLocation(device *kindle.Device, location *time.Location) *Controller {
+	return NewWithMetrics(device, location, nil)
+}
+
+func NewWithMetrics(device *kindle.Device, location *time.Location, metrics kindle.MetricsProvider) *Controller {
 	if location == nil {
 		location = time.Local
 	}
-	return &Controller{device: device, location: location}
+	return &Controller{device: device, location: location, metrics: metrics}
 }
 func (c *Controller) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	brightness, err := c.device.GetBrightness()
+	brightness, err := c.device.GetBrightnessContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -41,18 +44,19 @@ func (c *Controller) Start(ctx context.Context) error {
 		c.running = true
 		return nil
 	}
-	if err := c.device.SetRotation("horizontal"); err != nil {
+	if err := c.device.SetRotationContext(ctx, "horizontal"); err != nil {
 		return err
 	}
-	if err := c.device.ClearScreen(); err != nil {
+	if err := c.device.ClearScreenContext(ctx); err != nil {
 		return err
 	}
-	if err := c.device.SetBacklight(20); err != nil {
+	if err := c.device.SetBacklightContext(ctx, 20); err != nil {
 		return err
 	}
 	c.running = true
 	return nil
 }
+
 // Stop clears the e-ink panel and sets brightness to 0. Used on scheduled
 // window end and process exit (SIGTERM/SIGINT).
 func (c *Controller) Stop(ctx context.Context) error {
@@ -63,10 +67,10 @@ func (c *Controller) Stop(ctx context.Context) error {
 	defer c.mu.Unlock()
 	// Always attempt clear + zero backlight so SIGTERM / scheduled stop leave
 	// the panel blank and dark even if our running flag is stale.
-	if err := c.device.ClearScreen(); err != nil {
+	if err := c.device.ClearScreenContext(ctx); err != nil {
 		return err
 	}
-	if err := c.device.SetBacklight(0); err != nil {
+	if err := c.device.SetBacklightContext(ctx, 0); err != nil {
 		return err
 	}
 	c.running = false
@@ -76,7 +80,7 @@ func (c *Controller) IsRunning(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	brightness, err := c.device.GetBrightness()
+	brightness, err := c.device.GetBrightnessContext(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -85,48 +89,8 @@ func (c *Controller) IsRunning(ctx context.Context) (bool, error) {
 	c.mu.Unlock()
 	return brightness > 0, nil
 }
-func (c *Controller) RenderNews(ctx context.Context, items []*screenv1.NewsItem) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	running := c.running
-	c.mu.Unlock()
-	if !running {
-		return display.ErrNotRunning
-	}
-	if err := c.device.ClearScreen(); err != nil {
-		return err
-	}
-	if len(items) == 0 {
-		return nil
-	}
-	item := items[0]
-	if err := c.device.ShowTitle(item.Title); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if item.Description != "" {
-		if err := c.device.ShowDescription(item.Description); err != nil {
-			return err
-		}
-	}
-	domains := make([]string, 0, len(item.Sources))
-	for _, s := range item.Sources {
-		if s != nil && s.Domain != "" {
-			domains = append(domains, s.Domain)
-		}
-	}
-	if len(domains) > 0 {
-		return c.device.ShowDomains(strings.Join(domains, " · "))
-	}
-	return nil
-}
-
 func (c *Controller) clockOptions() kindle.ClockOptions {
-	return kindle.ClockOptions{Now: func() time.Time {
+	return kindle.ClockOptions{Metrics: c.metrics, Now: func() time.Time {
 		return time.Now().In(c.location)
 	}}
 }
@@ -170,10 +134,17 @@ func (c *Controller) Show(ctx context.Context, a alert.Alert) error {
 	if !running {
 		return display.ErrNotRunning
 	}
-	if err := c.device.ClearScreen(); err != nil {
+	if err := c.device.ClearScreenContext(ctx); err != nil {
 		return err
 	}
-	if err := c.device.ShowTitle(a.Message); err != nil {
+	message := a.Message
+	switch a.Severity {
+	case alert.SeverityCritical:
+		message = "⚠  " + message
+	case alert.SeverityWarning:
+		message = "!  " + message
+	}
+	if err := c.device.ShowTitleContext(ctx, message); err != nil {
 		return err
 	}
 	return ctx.Err()
@@ -182,5 +153,5 @@ func (c *Controller) Clear(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return c.device.ClearScreen()
+	return c.device.ClearScreenContext(ctx)
 }

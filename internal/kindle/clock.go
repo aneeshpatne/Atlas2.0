@@ -3,6 +3,7 @@ package kindle
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,15 @@ type ClockOptions struct {
 	FontPath string
 	FontSize int
 	Now      func() time.Time
+	Metrics  MetricsProvider
+}
+
+type MetricsSnapshot struct {
+	Climate, Temperature, Pressure, Humidity, PM25 string
+}
+
+type MetricsProvider interface {
+	ReadMetrics(context.Context) (MetricsSnapshot, error)
 }
 
 // RunClock switches the Kindle to landscape, clears the display, sets the
@@ -26,42 +36,8 @@ type ClockOptions struct {
 // non-flashing GC16 regional refresh. GC16 is slower than DU, but avoids
 // the cumulative ghosting that a clock running for hours would otherwise show.
 func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
-	if options.FontPath == "" {
-		options.FontPath = defaultClockFont
-	}
-	if options.Now == nil {
-		options.Now = time.Now
-	}
-
-	if err := d.SetRotation("horizontal"); err != nil {
-		return err
-	}
-	if err := d.ClearScreen(); err != nil {
-		return err
-	}
-	if err := d.SetBacklight(20); err != nil {
-		return err
-	}
-	width, height, err := d.displaySize()
+	options, layout, width, height, err := d.initializeClock(ctx, options)
 	if err != nil {
-		return err
-	}
-
-	layout := newDashboardLayout(width, height)
-	// Prefer the largest face that still fits the clock band. drawClock may
-	// shrink slightly for long times ("12:59") so AM/PM stays visible.
-	if options.FontSize == 0 {
-		options.FontSize = layout.clock.height * 98 / 100
-	}
-	if options.FontSize < 1 {
-		return fmt.Errorf("clock: font size must be positive")
-	}
-	maxFont := layout.clock.height * 98 / 100
-	if options.FontSize > maxFont {
-		options.FontSize = maxFont
-	}
-
-	if err := d.drawStaticChrome(options, layout, width, height); err != nil {
 		return err
 	}
 	lastDate := ""
@@ -71,14 +47,14 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 		now := options.Now()
 		date := now.Format("Monday, January 2")
 		if date != lastDate {
-			if err := d.drawDate(date, options, layout, width, height); err != nil {
+			if err := d.drawDateContext(ctx, date, options, layout, width, height); err != nil {
 				return err
 			}
 			lastDate = date
 		}
 		clock := now.Format("3:04 PM")
 		if clock != lastClock {
-			if err := d.drawClock(now, options, layout, width, height); err != nil {
+			if err := d.drawClockContext(ctx, now, options, layout, width, height); err != nil {
 				return err
 			}
 			lastClock = clock
@@ -94,17 +70,60 @@ func (d *Device) RunClock(ctx context.Context, options ClockOptions) error {
 	}
 }
 
+func (d *Device) initializeClock(ctx context.Context, options ClockOptions) (ClockOptions, dashboardLayout, int, int, error) {
+	if options.FontPath == "" {
+		options.FontPath = defaultClockFont
+	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+
+	if err := d.SetRotationContext(ctx, "horizontal"); err != nil {
+		return options, dashboardLayout{}, 0, 0, err
+	}
+	if err := d.ClearScreenContext(ctx); err != nil {
+		return options, dashboardLayout{}, 0, 0, err
+	}
+	if err := d.SetBacklightContext(ctx, 20); err != nil {
+		return options, dashboardLayout{}, 0, 0, err
+	}
+	width, height, err := d.displaySizeContext(ctx)
+	if err != nil {
+		return options, dashboardLayout{}, 0, 0, err
+	}
+
+	layout := newDashboardLayout(width, height)
+	// Prefer the largest face that still fits the clock band. drawClock may
+	// shrink slightly for long times ("12:59") so AM/PM stays visible.
+	if options.FontSize == 0 {
+		options.FontSize = layout.clock.height * 98 / 100
+	}
+	if options.FontSize < 1 {
+		return options, dashboardLayout{}, 0, 0, fmt.Errorf("clock: font size must be positive")
+	}
+	maxFont := layout.clock.height * 98 / 100
+	if options.FontSize > maxFont {
+		options.FontSize = maxFont
+	}
+
+	if err := d.drawStaticChromeContext(ctx, options, layout, width, height); err != nil {
+		return options, dashboardLayout{}, 0, 0, err
+	}
+	return options, layout, width, height, nil
+}
+
 // ShowClockOnce paints the clock dashboard once and returns. It reuses the
-// same layout and rendering path as RunClock, while cancelling an internal
-// child context so RunClock exits after its first frame instead of waiting for
-// the next minute boundary.
+// same initialization and frame-rendering path as RunClock.
 func (d *Device) ShowClockOnce(ctx context.Context, options ClockOptions) error {
-	if err := ctx.Err(); err != nil {
+	options, layout, width, height, err := d.initializeClock(ctx, options)
+	if err != nil {
 		return err
 	}
-	onceCtx, cancel := context.WithCancel(ctx)
-	cancel()
-	return d.RunClock(onceCtx, options)
+	now := options.Now()
+	if err := d.drawDateContext(ctx, now.Format("Monday, January 2"), options, layout, width, height); err != nil {
+		return err
+	}
+	return d.drawClockContext(ctx, now, options, layout, width, height)
 }
 
 type displayRect struct{ top, left, width, height int }
@@ -203,7 +222,18 @@ func newDashboardLayout(width, height int) dashboardLayout {
 }
 
 func (d *Device) displaySize() (int, int, error) {
-	output, err := d.client.Run("/mnt/us/usbnet/bin/fbink -e")
+	return d.displaySizeContext(context.Background())
+}
+
+func (d *Device) displaySizeContext(ctx context.Context) (int, int, error) {
+	d.mu.Lock()
+	if d.displayWidth > 0 && d.displayHeight > 0 {
+		width, height := d.displayWidth, d.displayHeight
+		d.mu.Unlock()
+		return width, height, nil
+	}
+	d.mu.Unlock()
+	output, err := d.run(ctx, "/mnt/us/usbnet/bin/fbink -e")
 	if err != nil {
 		return 0, 0, fmt.Errorf("clock: get display size: %w", err)
 	}
@@ -216,6 +246,9 @@ func (d *Device) displaySize() (int, int, error) {
 	if widthErr != nil || heightErr != nil || width < 1 || height < 1 {
 		return 0, 0, fmt.Errorf("clock: invalid display size %q", strings.TrimSpace(output))
 	}
+	d.mu.Lock()
+	d.displayWidth, d.displayHeight = width, height
+	d.mu.Unlock()
 	return width, height, nil
 }
 
@@ -226,15 +259,27 @@ const fbinkPath = "/mnt/us/usbnet/bin/fbink"
 // drawStaticChrome paints the non-clock chrome once at startup: rules,
 // climate row, metric labels/placeholders, and column dividers.
 func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
-	if err := d.fillRect(layout.clockRule, true); err != nil {
+	return d.drawStaticChromeContext(context.Background(), options, layout, screenWidth, screenHeight)
+}
+
+func (d *Device) drawStaticChromeContext(ctx context.Context, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	readings := MetricsSnapshot{Climate: "--", Temperature: "--", Pressure: "--", Humidity: "--", PM25: "--"}
+	if options.Metrics != nil {
+		if provided, err := options.Metrics.ReadMetrics(ctx); err != nil {
+			slog.Warn("clock metrics unavailable", "error", err)
+		} else {
+			readings = fillMissingMetrics(provided)
+		}
+	}
+	if err := d.fillRectContext(ctx, layout.clockRule, true); err != nil {
 		return fmt.Errorf("clock: clock rule: %w", err)
 	}
-	if err := d.drawDottedLine(layout.divider); err != nil {
+	if err := d.drawDottedLineContext(ctx, layout.divider); err != nil {
 		return fmt.Errorf("clock: divider: %w", err)
 	}
 	// Keep label and value together so the row reads as one centered status.
 	// Target ~9% of screen height (capped to the climate band).
-	if err := d.drawTextRegion("climate", "Climate: Warm", options.FontPath, screenHeight*9/100, layout.climate, screenWidth, screenHeight, true); err != nil {
+	if err := d.drawTextRegionContext(ctx, "climate", "Climate: "+readings.Climate, options.FontPath, screenHeight*9/100, layout.climate, screenWidth, screenHeight, true); err != nil {
 		return err
 	}
 
@@ -246,10 +291,10 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 		number string
 		unit   string
 	}{
-		{"temperature", "TEMP", "24", "°C"},
-		{"pressure", "PRESS", "1013", "hPa"},
-		{"humidity", "HUMID", "58", "%"},
-		{"pm25", "PM2.5", "12", "µg/m³"},
+		{"temperature", "TEMP", readings.Temperature, "°C"},
+		{"pressure", "PRESS", readings.Pressure, "hPa"},
+		{"humidity", "HUMID", readings.Humidity, "%"},
+		{"pm25", "PM2.5", readings.PM25, "µg/m³"},
 	}
 	labelSize := screenHeight * 25 / 1000
 	unitSize := screenHeight * 24 / 1000
@@ -260,10 +305,10 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 			top: box.top, left: box.left,
 			width: box.width, height: box.height * 16 / 100,
 		}
-		if err := d.drawTextRegion(metric.name+" label", metric.label, options.FontPath, labelSize, labelBox, screenWidth, screenHeight, true); err != nil {
+		if err := d.drawTextRegionContext(ctx, metric.name+" label", metric.label, options.FontPath, labelSize, labelBox, screenWidth, screenHeight, true); err != nil {
 			return err
 		}
-		if err := d.fillRect(layout.metricRules[i], true); err != nil {
+		if err := d.fillRectContext(ctx, layout.metricRules[i], true); err != nil {
 			return fmt.Errorf("clock: %s rule: %w", metric.name, err)
 		}
 		// Huge digits — size from the number band, then fit column width.
@@ -278,26 +323,42 @@ func (d *Device) drawStaticChrome(options ClockOptions, layout dashboardLayout, 
 				numberSize = maxByWidth
 			}
 		}
-		if err := d.drawTextRegion(metric.name+" number", metric.number, options.FontPath, numberSize, numberBox, screenWidth, screenHeight, true); err != nil {
+		if err := d.drawTextRegionContext(ctx, metric.name+" number", metric.number, options.FontPath, numberSize, numberBox, screenWidth, screenHeight, true); err != nil {
 			return err
 		}
 		unitBox := displayRect{
 			top: box.top + box.height*76/100, left: box.left,
 			width: box.width, height: box.height * 18 / 100,
 		}
-		if err := d.drawTextRegion(metric.name+" unit", metric.unit, options.FontPath, unitSize, unitBox, screenWidth, screenHeight, true); err != nil {
+		if err := d.drawTextRegionContext(ctx, metric.name+" unit", metric.unit, options.FontPath, unitSize, unitBox, screenWidth, screenHeight, true); err != nil {
 			return err
 		}
 	}
 	for i, div := range layout.metricDividers {
-		if err := d.fillRect(div, true); err != nil {
+		if err := d.fillRectContext(ctx, div, true); err != nil {
 			return fmt.Errorf("clock: metric divider %d: %w", i, err)
 		}
 	}
 	return nil
 }
 
+func fillMissingMetrics(value MetricsSnapshot) MetricsSnapshot {
+	for field, current := range map[*string]string{
+		&value.Climate: value.Climate, &value.Temperature: value.Temperature,
+		&value.Pressure: value.Pressure, &value.Humidity: value.Humidity, &value.PM25: value.PM25,
+	} {
+		if strings.TrimSpace(current) == "" {
+			*field = "--"
+		}
+	}
+	return value
+}
+
 func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	return d.drawClockContext(context.Background(), now, options, layout, screenWidth, screenHeight)
+}
+
+func (d *Device) drawClockContext(ctx context.Context, now time.Time, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
 	box := layout.clock
 	region := regionSpec(box)
 
@@ -363,18 +424,26 @@ func (d *Device) drawClock(now time.Time, options ClockOptions, layout dashboard
 		fbinkPath, shellQuote(periodSpec), shellQuote(periodText),
 		fbinkPath, region,
 	)
-	if _, err := d.client.Run(command); err != nil {
+	if _, err := d.run(ctx, command); err != nil {
 		return fmt.Errorf("clock: draw %q: %w", now.Format("3:04 PM"), err)
 	}
 	return nil
 }
 
 func (d *Device) drawDate(value string, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
+	return d.drawDateContext(context.Background(), value, options, layout, screenWidth, screenHeight)
+}
+
+func (d *Device) drawDateContext(ctx context.Context, value string, options ClockOptions, layout dashboardLayout, screenWidth, screenHeight int) error {
 	// Target ~9% of screen height (capped to the date band).
-	return d.drawTextRegion("date", value, options.FontPath, screenHeight*9/100, layout.date, screenWidth, screenHeight, true)
+	return d.drawTextRegionContext(ctx, "date", value, options.FontPath, screenHeight*9/100, layout.date, screenWidth, screenHeight, true)
 }
 
 func (d *Device) drawTextRegion(name, value, font string, fontSize int, box displayRect, screenWidth, screenHeight int, centered bool) error {
+	return d.drawTextRegionContext(context.Background(), name, value, font, fontSize, box, screenWidth, screenHeight, centered)
+}
+
+func (d *Device) drawTextRegionContext(ctx context.Context, name, value, font string, fontSize int, box displayRect, screenWidth, screenHeight int, centered bool) error {
 	if box.width < 2 || box.height < 2 {
 		return fmt.Errorf("clock: draw %s: region too small (%dx%d)", name, box.width, box.height)
 	}
@@ -390,7 +459,7 @@ func (d *Device) drawTextRegion(name, value, font string, fontSize int, box disp
 	region := regionSpec(box)
 	command := fmt.Sprintf(`%s -q -b -B WHITE -k %s && %s -q -b -B WHITE -C BLACK%s -t %s -- %s && %s -q -W GC16 -s %s`,
 		fbinkPath, region, fbinkPath, centerFlag, shellQuote(typeSpecNoPad(font, fontSize, box, screenWidth, screenHeight)), shellQuote(value), fbinkPath, region)
-	if _, err := d.client.Run(command); err != nil {
+	if _, err := d.run(ctx, command); err != nil {
 		return fmt.Errorf("clock: draw %s: %w", name, err)
 	}
 	return nil
@@ -399,6 +468,10 @@ func (d *Device) drawTextRegion(name, value, font string, fontSize int, box disp
 // fillRect paints a solid rectangle. black=true fills with black (rules/dividers);
 // black=false clears to white.
 func (d *Device) fillRect(box displayRect, black bool) error {
+	return d.fillRectContext(context.Background(), box, black)
+}
+
+func (d *Device) fillRectContext(ctx context.Context, box displayRect, black bool) error {
 	// FBInk treats 1px regions as empty and refuses to refresh them.
 	if box.width < 2 || box.height < 2 {
 		return nil
@@ -412,7 +485,7 @@ func (d *Device) fillRect(box displayRect, black bool) error {
 	// line is visible without a full-screen flash.
 	command := fmt.Sprintf(`%s -q -b -B %s -k %s && %s -q -W GC16 -s %s`,
 		fbinkPath, bg, region, fbinkPath, region)
-	if _, err := d.client.Run(command); err != nil {
+	if _, err := d.run(ctx, command); err != nil {
 		return err
 	}
 	return nil
@@ -421,11 +494,15 @@ func (d *Device) fillRect(box displayRect, black bool) error {
 // drawDottedLine approximates the mockup's dotted full-width separator by
 // stamping short black segments with white gaps between them.
 func (d *Device) drawDottedLine(box displayRect) error {
+	return d.drawDottedLineContext(context.Background(), box)
+}
+
+func (d *Device) drawDottedLineContext(ctx context.Context, box displayRect) error {
 	if box.width < 2 || box.height < 2 {
 		return nil
 	}
 	// Clear the strip first so old ink doesn't ghost under the dots.
-	if err := d.fillRect(box, false); err != nil {
+	if err := d.fillRectContext(ctx, box, false); err != nil {
 		return err
 	}
 	dash := max(3, box.width*6/1000)
@@ -440,7 +517,7 @@ func (d *Device) drawDottedLine(box displayRect) error {
 	}
 	// One regional refresh over the whole strip after all dashes are painted.
 	parts = append(parts, fmt.Sprintf(`%s -q -W GC16 -s %s`, fbinkPath, regionSpec(box)))
-	if _, err := d.client.Run(strings.Join(parts, " && ")); err != nil {
+	if _, err := d.run(ctx, strings.Join(parts, " && ")); err != nil {
 		return err
 	}
 	return nil

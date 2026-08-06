@@ -4,8 +4,9 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aneeshpatne/atlas/internal/kindle"
@@ -19,15 +20,24 @@ const (
 
 // Dashboard loads news from Redis and shows it on a Kindle.
 type Dashboard struct {
-	store  *news.Store
-	device *kindle.Device
+	store      *news.Store
+	device     *kindle.Device
+	backdropMu sync.Mutex
+	backdrops  map[string]cachedBackdrop
+}
+
+type cachedBackdrop struct {
+	data []byte
+	path string
+	err  error
 }
 
 // New returns a dashboard wired to a news store and Kindle device.
 func New(store *news.Store, device *kindle.Device) *Dashboard {
 	return &Dashboard{
-		store:  store,
-		device: device,
+		store:     store,
+		device:    device,
+		backdrops: make(map[string]cachedBackdrop),
 	}
 }
 
@@ -46,6 +56,7 @@ type Options struct {
 	StoryHold time.Duration
 	// MaxStoriesPerGenre limits each pass through a genre. Zero means all stories.
 	MaxStoriesPerGenre int
+	AllowPrivateImages bool
 }
 
 // ShowNews walks genres, shows each genre screen, then rotates+displays stories
@@ -102,14 +113,14 @@ func (d *Dashboard) ShowNewsCycle(ctx context.Context, options Options) error {
 		return err
 	}
 	if len(genres) == 0 {
-		log.Printf("dashboard: no genres in redis")
+		slog.Info("dashboard has no genres")
 		return wait(ctx, options.GenreHold)
 	}
 	for _, genre := range genres {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		if err := d.showGenre(genre, options.AssetsDir); err != nil {
+		if err := d.showGenre(ctx, genre, options.AssetsDir); err != nil {
 			return fmt.Errorf("show genre %q: %w", genre, err)
 		}
 		if err := wait(ctx, options.GenreHold); err != nil {
@@ -139,13 +150,13 @@ func (d *Dashboard) genres(ctx context.Context, filter string) ([]string, error)
 	return out, nil
 }
 
-func (d *Dashboard) showGenre(genre, assetsDir string) error {
-	backdrop, path, err := loadGenreBackdrop(assetsDir, genre)
+func (d *Dashboard) showGenre(ctx context.Context, genre, assetsDir string) error {
+	backdrop, path, err := d.loadGenreBackdrop(assetsDir, genre)
 	if err != nil {
 		return fmt.Errorf("genre backdrop for %q: %w", genre, err)
 	}
-	log.Printf("dashboard: genre %q backdrop %s", genre, path)
-	return d.device.ShowGenreScreen(genre, backdrop)
+	slog.Debug("loaded genre backdrop", "genre", genre, "path", path)
+	return d.device.ShowGenreScreenContext(ctx, genre, backdrop)
 }
 
 // loadGenreBackdrop loads assets/genres/<genre>.* (case-insensitive), falling
@@ -158,6 +169,18 @@ func loadGenreBackdrop(assetsDir, genre string) ([]byte, string, error) {
 	return loadBackdrop(dir, genre)
 }
 
+func (d *Dashboard) loadGenreBackdrop(assetsDir, genre string) ([]byte, string, error) {
+	key := strings.TrimSpace(assetsDir) + "\x00" + strings.ToLower(strings.TrimSpace(genre))
+	d.backdropMu.Lock()
+	defer d.backdropMu.Unlock()
+	if cached, ok := d.backdrops[key]; ok {
+		return cached.data, cached.path, cached.err
+	}
+	data, path, err := loadGenreBackdrop(assetsDir, genre)
+	d.backdrops[key] = cachedBackdrop{data: data, path: path, err: err}
+	return data, path, err
+}
+
 // drainGenre shows each story currently in the genre queue once via LMOVE rotate.
 func (d *Dashboard) drainGenre(ctx context.Context, genre string, options Options) error {
 	n, err := d.store.Len(ctx, genre)
@@ -168,12 +191,12 @@ func (d *Dashboard) drainGenre(ctx context.Context, genre string, options Option
 		n = int64(options.MaxStoriesPerGenre)
 	}
 	// Genre asset is the story fallback when a source has no usable ogurl.
-	genreBackdrop, backdropPath, err := loadGenreBackdrop(options.AssetsDir, genre)
+	genreBackdrop, backdropPath, err := d.loadGenreBackdrop(options.AssetsDir, genre)
 	if err != nil {
-		log.Printf("dashboard: genre %q story fallback backdrop unavailable: %v", genre, err)
+		slog.Warn("story fallback backdrop unavailable", "genre", genre, "error", err)
 		genreBackdrop = nil
 	} else {
-		log.Printf("dashboard: genre %q story fallback backdrop %s", genre, backdropPath)
+		slog.Debug("loaded story fallback backdrop", "genre", genre, "path", backdropPath)
 	}
 	for i := int64(0); i < n; i++ {
 		if err := ctx.Err(); err != nil {
@@ -187,7 +210,7 @@ func (d *Dashboard) drainGenre(ctx context.Context, genre string, options Option
 			return nil
 		}
 		if strings.TrimSpace(story.Title) == "" {
-			log.Printf("dashboard: skip empty-title story in genre %q", genre)
+			slog.Warn("skipping empty-title story", "genre", genre)
 			continue
 		}
 		if strings.TrimSpace(story.Genre) == "" {
@@ -195,8 +218,9 @@ func (d *Dashboard) drainGenre(ctx context.Context, genre string, options Option
 		}
 		storyCtx, cancel := context.WithTimeout(ctx, options.StoryHold)
 		err = d.device.RunStory(storyCtx, toKindleStory(story), kindle.StoryOptions{
-			FontPath:      options.FontPath,
-			FallbackImage: genreBackdrop,
+			FontPath:          options.FontPath,
+			FallbackImage:     genreBackdrop,
+			AllowPrivateImage: options.AllowPrivateImages,
 		})
 		cancel()
 		if err != nil {
