@@ -21,10 +21,180 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type AlertSeverity int32
+
+const (
+	AlertSeverity_ALERT_SEVERITY_UNSPECIFIED AlertSeverity = 0
+	AlertSeverity_ALERT_SEVERITY_INFO        AlertSeverity = 1
+	AlertSeverity_ALERT_SEVERITY_WARNING     AlertSeverity = 2
+	AlertSeverity_ALERT_SEVERITY_CRITICAL    AlertSeverity = 3
+)
+
+// Enum value maps for AlertSeverity.
+var (
+	AlertSeverity_name = map[int32]string{
+		0: "ALERT_SEVERITY_UNSPECIFIED",
+		1: "ALERT_SEVERITY_INFO",
+		2: "ALERT_SEVERITY_WARNING",
+		3: "ALERT_SEVERITY_CRITICAL",
+	}
+	AlertSeverity_value = map[string]int32{
+		"ALERT_SEVERITY_UNSPECIFIED": 0,
+		"ALERT_SEVERITY_INFO":        1,
+		"ALERT_SEVERITY_WARNING":     2,
+		"ALERT_SEVERITY_CRITICAL":    3,
+	}
+)
+
+func (x AlertSeverity) Enum() *AlertSeverity {
+	p := new(AlertSeverity)
+	*p = x
+	return p
+}
+
+func (x AlertSeverity) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AlertSeverity) Descriptor() protoreflect.EnumDescriptor {
+	return file_screen_v1_news_screen_proto_enumTypes[0].Descriptor()
+}
+
+func (AlertSeverity) Type() protoreflect.EnumType {
+	return &file_screen_v1_news_screen_proto_enumTypes[0]
+}
+
+func (x AlertSeverity) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AlertSeverity.Descriptor instead.
+func (AlertSeverity) EnumDescriptor() ([]byte, []int) {
+	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{0}
+}
+
+type CommandState int32
+
+const (
+	CommandState_COMMAND_STATE_UNSPECIFIED CommandState = 0
+	CommandState_COMMAND_STATE_STORED      CommandState = 1
+	CommandState_COMMAND_STATE_DISPLAYING  CommandState = 2
+	CommandState_COMMAND_STATE_QUEUED      CommandState = 3
+)
+
+// Enum value maps for CommandState.
+var (
+	CommandState_name = map[int32]string{
+		0: "COMMAND_STATE_UNSPECIFIED",
+		1: "COMMAND_STATE_STORED",
+		2: "COMMAND_STATE_DISPLAYING",
+		3: "COMMAND_STATE_QUEUED",
+	}
+	CommandState_value = map[string]int32{
+		"COMMAND_STATE_UNSPECIFIED": 0,
+		"COMMAND_STATE_STORED":      1,
+		"COMMAND_STATE_DISPLAYING":  2,
+		"COMMAND_STATE_QUEUED":      3,
+	}
+)
+
+func (x CommandState) Enum() *CommandState {
+	p := new(CommandState)
+	*p = x
+	return p
+}
+
+func (x CommandState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandState) Descriptor() protoreflect.EnumDescriptor {
+	return file_screen_v1_news_screen_proto_enumTypes[1].Descriptor()
+}
+
+func (CommandState) Type() protoreflect.EnumType {
+	return &file_screen_v1_news_screen_proto_enumTypes[1]
+}
+
+func (x CommandState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandState.Descriptor instead.
+func (CommandState) EnumDescriptor() ([]byte, []int) {
+	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{1}
+}
+
+type LifecycleState int32
+
+const (
+	LifecycleState_LIFECYCLE_STATE_UNSPECIFIED LifecycleState = 0
+	LifecycleState_LIFECYCLE_STATE_OFF         LifecycleState = 1
+	LifecycleState_LIFECYCLE_STATE_STARTING    LifecycleState = 2
+	LifecycleState_LIFECYCLE_STATE_RUNNING     LifecycleState = 3
+	LifecycleState_LIFECYCLE_STATE_PAUSING     LifecycleState = 4
+	LifecycleState_LIFECYCLE_STATE_ALERTING    LifecycleState = 5
+	LifecycleState_LIFECYCLE_STATE_STOPPING    LifecycleState = 6
+	LifecycleState_LIFECYCLE_STATE_FAILED      LifecycleState = 7
+)
+
+// Enum value maps for LifecycleState.
+var (
+	LifecycleState_name = map[int32]string{
+		0: "LIFECYCLE_STATE_UNSPECIFIED",
+		1: "LIFECYCLE_STATE_OFF",
+		2: "LIFECYCLE_STATE_STARTING",
+		3: "LIFECYCLE_STATE_RUNNING",
+		4: "LIFECYCLE_STATE_PAUSING",
+		5: "LIFECYCLE_STATE_ALERTING",
+		6: "LIFECYCLE_STATE_STOPPING",
+		7: "LIFECYCLE_STATE_FAILED",
+	}
+	LifecycleState_value = map[string]int32{
+		"LIFECYCLE_STATE_UNSPECIFIED": 0,
+		"LIFECYCLE_STATE_OFF":         1,
+		"LIFECYCLE_STATE_STARTING":    2,
+		"LIFECYCLE_STATE_RUNNING":     3,
+		"LIFECYCLE_STATE_PAUSING":     4,
+		"LIFECYCLE_STATE_ALERTING":    5,
+		"LIFECYCLE_STATE_STOPPING":    6,
+		"LIFECYCLE_STATE_FAILED":      7,
+	}
+)
+
+func (x LifecycleState) Enum() *LifecycleState {
+	p := new(LifecycleState)
+	*p = x
+	return p
+}
+
+func (x LifecycleState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LifecycleState) Descriptor() protoreflect.EnumDescriptor {
+	return file_screen_v1_news_screen_proto_enumTypes[2].Descriptor()
+}
+
+func (LifecycleState) Type() protoreflect.EnumType {
+	return &file_screen_v1_news_screen_proto_enumTypes[2]
+}
+
+func (x LifecycleState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LifecycleState.Descriptor instead.
+func (LifecycleState) EnumDescriptor() ([]byte, []int) {
+	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{2}
+}
+
 type Alert struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Color         string                 `protobuf:"bytes,1,opt,name=color,proto3" json:"color,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in screen/v1/news_screen.proto.
+	Color         string        `protobuf:"bytes,1,opt,name=color,proto3" json:"color,omitempty"`
+	Message       string        `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Severity      AlertSeverity `protobuf:"varint,3,opt,name=severity,proto3,enum=screen.v1.AlertSeverity" json:"severity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -59,6 +229,7 @@ func (*Alert) Descriptor() ([]byte, []int) {
 	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: Marked as deprecated in screen/v1/news_screen.proto.
 func (x *Alert) GetColor() string {
 	if x != nil {
 		return x.Color
@@ -73,11 +244,20 @@ func (x *Alert) GetMessage() string {
 	return ""
 }
 
+func (x *Alert) GetSeverity() AlertSeverity {
+	if x != nil {
+		return x.Severity
+	}
+	return AlertSeverity_ALERT_SEVERITY_UNSPECIFIED
+}
+
 type CommandAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Accepted    bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	OperationId string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// Deprecated: Marked as deprecated in screen/v1/news_screen.proto.
+	State         string       `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	CommandState  CommandState `protobuf:"varint,4,opt,name=command_state,json=commandState,proto3,enum=screen.v1.CommandState" json:"command_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,9 +306,177 @@ func (x *CommandAck) GetOperationId() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in screen/v1/news_screen.proto.
 func (x *CommandAck) GetState() string {
 	if x != nil {
 		return x.State
+	}
+	return ""
+}
+
+func (x *CommandAck) GetCommandState() CommandState {
+	if x != nil {
+		return x.CommandState
+	}
+	return CommandState_COMMAND_STATE_UNSPECIFIED
+}
+
+type StatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatusRequest) Reset() {
+	*x = StatusRequest{}
+	mi := &file_screen_v1_news_screen_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatusRequest) ProtoMessage() {}
+
+func (x *StatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_screen_v1_news_screen_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
+func (*StatusRequest) Descriptor() ([]byte, []int) {
+	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{2}
+}
+
+type ServiceStatus struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Lifecycle               LifecycleState         `protobuf:"varint,1,opt,name=lifecycle,proto3,enum=screen.v1.LifecycleState" json:"lifecycle,omitempty"`
+	DesiredOn               bool                   `protobuf:"varint,2,opt,name=desired_on,json=desiredOn,proto3" json:"desired_on,omitempty"`
+	DisplayRunning          bool                   `protobuf:"varint,3,opt,name=display_running,json=displayRunning,proto3" json:"display_running,omitempty"`
+	NewsRunning             bool                   `protobuf:"varint,4,opt,name=news_running,json=newsRunning,proto3" json:"news_running,omitempty"`
+	AlertRunning            bool                   `protobuf:"varint,5,opt,name=alert_running,json=alertRunning,proto3" json:"alert_running,omitempty"`
+	QueuedAlerts            int32                  `protobuf:"varint,6,opt,name=queued_alerts,json=queuedAlerts,proto3" json:"queued_alerts,omitempty"`
+	CurrentAlertOperationId string                 `protobuf:"bytes,7,opt,name=current_alert_operation_id,json=currentAlertOperationId,proto3" json:"current_alert_operation_id,omitempty"`
+	LastStartedUnix         int64                  `protobuf:"varint,8,opt,name=last_started_unix,json=lastStartedUnix,proto3" json:"last_started_unix,omitempty"`
+	LastStoppedUnix         int64                  `protobuf:"varint,9,opt,name=last_stopped_unix,json=lastStoppedUnix,proto3" json:"last_stopped_unix,omitempty"`
+	LastRefreshUnix         int64                  `protobuf:"varint,10,opt,name=last_refresh_unix,json=lastRefreshUnix,proto3" json:"last_refresh_unix,omitempty"`
+	LastError               string                 `protobuf:"bytes,11,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ServiceStatus) Reset() {
+	*x = ServiceStatus{}
+	mi := &file_screen_v1_news_screen_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceStatus) ProtoMessage() {}
+
+func (x *ServiceStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_screen_v1_news_screen_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceStatus.ProtoReflect.Descriptor instead.
+func (*ServiceStatus) Descriptor() ([]byte, []int) {
+	return file_screen_v1_news_screen_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ServiceStatus) GetLifecycle() LifecycleState {
+	if x != nil {
+		return x.Lifecycle
+	}
+	return LifecycleState_LIFECYCLE_STATE_UNSPECIFIED
+}
+
+func (x *ServiceStatus) GetDesiredOn() bool {
+	if x != nil {
+		return x.DesiredOn
+	}
+	return false
+}
+
+func (x *ServiceStatus) GetDisplayRunning() bool {
+	if x != nil {
+		return x.DisplayRunning
+	}
+	return false
+}
+
+func (x *ServiceStatus) GetNewsRunning() bool {
+	if x != nil {
+		return x.NewsRunning
+	}
+	return false
+}
+
+func (x *ServiceStatus) GetAlertRunning() bool {
+	if x != nil {
+		return x.AlertRunning
+	}
+	return false
+}
+
+func (x *ServiceStatus) GetQueuedAlerts() int32 {
+	if x != nil {
+		return x.QueuedAlerts
+	}
+	return 0
+}
+
+func (x *ServiceStatus) GetCurrentAlertOperationId() string {
+	if x != nil {
+		return x.CurrentAlertOperationId
+	}
+	return ""
+}
+
+func (x *ServiceStatus) GetLastStartedUnix() int64 {
+	if x != nil {
+		return x.LastStartedUnix
+	}
+	return 0
+}
+
+func (x *ServiceStatus) GetLastStoppedUnix() int64 {
+	if x != nil {
+		return x.LastStoppedUnix
+	}
+	return 0
+}
+
+func (x *ServiceStatus) GetLastRefreshUnix() int64 {
+	if x != nil {
+		return x.LastRefreshUnix
+	}
+	return 0
+}
+
+func (x *ServiceStatus) GetLastError() string {
+	if x != nil {
+		return x.LastError
 	}
 	return ""
 }
@@ -137,18 +485,56 @@ var File_screen_v1_news_screen_proto protoreflect.FileDescriptor
 
 const file_screen_v1_news_screen_proto_rawDesc = "" +
 	"\n" +
-	"\x1bscreen/v1/news_screen.proto\x12\tscreen.v1\x1a\x19screen/v1/news_item.proto\"7\n" +
-	"\x05Alert\x12\x14\n" +
-	"\x05color\x18\x01 \x01(\tR\x05color\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"a\n" +
+	"\x1bscreen/v1/news_screen.proto\x12\tscreen.v1\x1a\x19screen/v1/news_item.proto\"q\n" +
+	"\x05Alert\x12\x18\n" +
+	"\x05color\x18\x01 \x01(\tB\x02\x18\x01R\x05color\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x124\n" +
+	"\bseverity\x18\x03 \x01(\x0e2\x18.screen.v1.AlertSeverityR\bseverity\"\xa3\x01\n" +
 	"\n" +
 	"CommandAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12!\n" +
-	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\tR\x05state2\x7f\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x18\n" +
+	"\x05state\x18\x03 \x01(\tB\x02\x18\x01R\x05state\x12<\n" +
+	"\rcommand_state\x18\x04 \x01(\x0e2\x17.screen.v1.CommandStateR\fcommandState\"\x0f\n" +
+	"\rStatusRequest\"\xdd\x03\n" +
+	"\rServiceStatus\x127\n" +
+	"\tlifecycle\x18\x01 \x01(\x0e2\x19.screen.v1.LifecycleStateR\tlifecycle\x12\x1d\n" +
+	"\n" +
+	"desired_on\x18\x02 \x01(\bR\tdesiredOn\x12'\n" +
+	"\x0fdisplay_running\x18\x03 \x01(\bR\x0edisplayRunning\x12!\n" +
+	"\fnews_running\x18\x04 \x01(\bR\vnewsRunning\x12#\n" +
+	"\ralert_running\x18\x05 \x01(\bR\falertRunning\x12#\n" +
+	"\rqueued_alerts\x18\x06 \x01(\x05R\fqueuedAlerts\x12;\n" +
+	"\x1acurrent_alert_operation_id\x18\a \x01(\tR\x17currentAlertOperationId\x12*\n" +
+	"\x11last_started_unix\x18\b \x01(\x03R\x0flastStartedUnix\x12*\n" +
+	"\x11last_stopped_unix\x18\t \x01(\x03R\x0flastStoppedUnix\x12*\n" +
+	"\x11last_refresh_unix\x18\n" +
+	" \x01(\x03R\x0flastRefreshUnix\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\v \x01(\tR\tlastError*\x81\x01\n" +
+	"\rAlertSeverity\x12\x1e\n" +
+	"\x1aALERT_SEVERITY_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ALERT_SEVERITY_INFO\x10\x01\x12\x1a\n" +
+	"\x16ALERT_SEVERITY_WARNING\x10\x02\x12\x1b\n" +
+	"\x17ALERT_SEVERITY_CRITICAL\x10\x03*\x7f\n" +
+	"\fCommandState\x12\x1d\n" +
+	"\x19COMMAND_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14COMMAND_STATE_STORED\x10\x01\x12\x1c\n" +
+	"\x18COMMAND_STATE_DISPLAYING\x10\x02\x12\x18\n" +
+	"\x14COMMAND_STATE_QUEUED\x10\x03*\xfa\x01\n" +
+	"\x0eLifecycleState\x12\x1f\n" +
+	"\x1bLIFECYCLE_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13LIFECYCLE_STATE_OFF\x10\x01\x12\x1c\n" +
+	"\x18LIFECYCLE_STATE_STARTING\x10\x02\x12\x1b\n" +
+	"\x17LIFECYCLE_STATE_RUNNING\x10\x03\x12\x1b\n" +
+	"\x17LIFECYCLE_STATE_PAUSING\x10\x04\x12\x1c\n" +
+	"\x18LIFECYCLE_STATE_ALERTING\x10\x05\x12\x1c\n" +
+	"\x18LIFECYCLE_STATE_STOPPING\x10\x06\x12\x1a\n" +
+	"\x16LIFECYCLE_STATE_FAILED\x10\a2\xc0\x01\n" +
 	"\x11NewsScreenService\x125\n" +
 	"\aAddNews\x12\x13.screen.v1.NewsItem\x1a\x15.screen.v1.CommandAck\x123\n" +
-	"\bAddAlert\x12\x10.screen.v1.Alert\x1a\x15.screen.v1.CommandAckB5Z3github.com/aneeshpatne/atlas/gen/screen/v1;screenv1b\x06proto3"
+	"\bAddAlert\x12\x10.screen.v1.Alert\x1a\x15.screen.v1.CommandAck\x12?\n" +
+	"\tGetStatus\x12\x18.screen.v1.StatusRequest\x1a\x18.screen.v1.ServiceStatusB5Z3github.com/aneeshpatne/atlas/gen/screen/v1;screenv1b\x06proto3"
 
 var (
 	file_screen_v1_news_screen_proto_rawDescOnce sync.Once
@@ -162,22 +548,33 @@ func file_screen_v1_news_screen_proto_rawDescGZIP() []byte {
 	return file_screen_v1_news_screen_proto_rawDescData
 }
 
-var file_screen_v1_news_screen_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_screen_v1_news_screen_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_screen_v1_news_screen_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_screen_v1_news_screen_proto_goTypes = []any{
-	(*Alert)(nil),      // 0: screen.v1.Alert
-	(*CommandAck)(nil), // 1: screen.v1.CommandAck
-	(*NewsItem)(nil),   // 2: screen.v1.NewsItem
+	(AlertSeverity)(0),    // 0: screen.v1.AlertSeverity
+	(CommandState)(0),     // 1: screen.v1.CommandState
+	(LifecycleState)(0),   // 2: screen.v1.LifecycleState
+	(*Alert)(nil),         // 3: screen.v1.Alert
+	(*CommandAck)(nil),    // 4: screen.v1.CommandAck
+	(*StatusRequest)(nil), // 5: screen.v1.StatusRequest
+	(*ServiceStatus)(nil), // 6: screen.v1.ServiceStatus
+	(*NewsItem)(nil),      // 7: screen.v1.NewsItem
 }
 var file_screen_v1_news_screen_proto_depIdxs = []int32{
-	2, // 0: screen.v1.NewsScreenService.AddNews:input_type -> screen.v1.NewsItem
-	0, // 1: screen.v1.NewsScreenService.AddAlert:input_type -> screen.v1.Alert
-	1, // 2: screen.v1.NewsScreenService.AddNews:output_type -> screen.v1.CommandAck
-	1, // 3: screen.v1.NewsScreenService.AddAlert:output_type -> screen.v1.CommandAck
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: screen.v1.Alert.severity:type_name -> screen.v1.AlertSeverity
+	1, // 1: screen.v1.CommandAck.command_state:type_name -> screen.v1.CommandState
+	2, // 2: screen.v1.ServiceStatus.lifecycle:type_name -> screen.v1.LifecycleState
+	7, // 3: screen.v1.NewsScreenService.AddNews:input_type -> screen.v1.NewsItem
+	3, // 4: screen.v1.NewsScreenService.AddAlert:input_type -> screen.v1.Alert
+	5, // 5: screen.v1.NewsScreenService.GetStatus:input_type -> screen.v1.StatusRequest
+	4, // 6: screen.v1.NewsScreenService.AddNews:output_type -> screen.v1.CommandAck
+	4, // 7: screen.v1.NewsScreenService.AddAlert:output_type -> screen.v1.CommandAck
+	6, // 8: screen.v1.NewsScreenService.GetStatus:output_type -> screen.v1.ServiceStatus
+	6, // [6:9] is the sub-list for method output_type
+	3, // [3:6] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_screen_v1_news_screen_proto_init() }
@@ -191,13 +588,14 @@ func file_screen_v1_news_screen_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_screen_v1_news_screen_proto_rawDesc), len(file_screen_v1_news_screen_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   2,
+			NumEnums:      3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_screen_v1_news_screen_proto_goTypes,
 		DependencyIndexes: file_screen_v1_news_screen_proto_depIdxs,
+		EnumInfos:         file_screen_v1_news_screen_proto_enumTypes,
 		MessageInfos:      file_screen_v1_news_screen_proto_msgTypes,
 	}.Build()
 	File_screen_v1_news_screen_proto = out.File

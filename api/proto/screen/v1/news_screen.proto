@@ -9,15 +9,59 @@ import "screen/v1/news_item.proto";
 service NewsScreenService {
   rpc AddNews(NewsItem) returns (CommandAck);
   rpc AddAlert(Alert) returns (CommandAck);
+  rpc GetStatus(StatusRequest) returns (ServiceStatus);
 }
 
 message Alert {
-  string color = 1;
+  string color = 1 [deprecated = true];
   string message = 2;
+  AlertSeverity severity = 3;
+}
+
+enum AlertSeverity {
+  ALERT_SEVERITY_UNSPECIFIED = 0;
+  ALERT_SEVERITY_INFO = 1;
+  ALERT_SEVERITY_WARNING = 2;
+  ALERT_SEVERITY_CRITICAL = 3;
 }
 
 message CommandAck {
   bool accepted = 1;
   string operation_id = 2;
-  string state = 3;
+  string state = 3 [deprecated = true];
+  CommandState command_state = 4;
+}
+
+enum CommandState {
+  COMMAND_STATE_UNSPECIFIED = 0;
+  COMMAND_STATE_STORED = 1;
+  COMMAND_STATE_DISPLAYING = 2;
+  COMMAND_STATE_QUEUED = 3;
+}
+
+message StatusRequest {}
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  LIFECYCLE_STATE_OFF = 1;
+  LIFECYCLE_STATE_STARTING = 2;
+  LIFECYCLE_STATE_RUNNING = 3;
+  LIFECYCLE_STATE_PAUSING = 4;
+  LIFECYCLE_STATE_ALERTING = 5;
+  LIFECYCLE_STATE_STOPPING = 6;
+  LIFECYCLE_STATE_FAILED = 7;
+}
+
+message ServiceStatus {
+  LifecycleState lifecycle = 1;
+  bool desired_on = 2;
+  bool display_running = 3;
+  bool news_running = 4;
+  bool alert_running = 5;
+  int32 queued_alerts = 6;
+  string current_alert_operation_id = 7;
+  int64 last_started_unix = 8;
+  int64 last_stopped_unix = 9;
+  int64 last_refresh_unix = 10;
+  string last_error = 11;
 }

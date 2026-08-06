@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NewsScreenService_AddNews_FullMethodName  = "/screen.v1.NewsScreenService/AddNews"
-	NewsScreenService_AddAlert_FullMethodName = "/screen.v1.NewsScreenService/AddAlert"
+	NewsScreenService_AddNews_FullMethodName   = "/screen.v1.NewsScreenService/AddNews"
+	NewsScreenService_AddAlert_FullMethodName  = "/screen.v1.NewsScreenService/AddAlert"
+	NewsScreenService_GetStatus_FullMethodName = "/screen.v1.NewsScreenService/GetStatus"
 )
 
 // NewsScreenServiceClient is the client API for NewsScreenService service.
@@ -29,6 +30,7 @@ const (
 type NewsScreenServiceClient interface {
 	AddNews(ctx context.Context, in *NewsItem, opts ...grpc.CallOption) (*CommandAck, error)
 	AddAlert(ctx context.Context, in *Alert, opts ...grpc.CallOption) (*CommandAck, error)
+	GetStatus(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*ServiceStatus, error)
 }
 
 type newsScreenServiceClient struct {
@@ -59,12 +61,23 @@ func (c *newsScreenServiceClient) AddAlert(ctx context.Context, in *Alert, opts 
 	return out, nil
 }
 
+func (c *newsScreenServiceClient) GetStatus(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*ServiceStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServiceStatus)
+	err := c.cc.Invoke(ctx, NewsScreenService_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NewsScreenServiceServer is the server API for NewsScreenService service.
 // All implementations must embed UnimplementedNewsScreenServiceServer
 // for forward compatibility.
 type NewsScreenServiceServer interface {
 	AddNews(context.Context, *NewsItem) (*CommandAck, error)
 	AddAlert(context.Context, *Alert) (*CommandAck, error)
+	GetStatus(context.Context, *StatusRequest) (*ServiceStatus, error)
 	mustEmbedUnimplementedNewsScreenServiceServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedNewsScreenServiceServer) AddNews(context.Context, *NewsItem) 
 }
 func (UnimplementedNewsScreenServiceServer) AddAlert(context.Context, *Alert) (*CommandAck, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddAlert not implemented")
+}
+func (UnimplementedNewsScreenServiceServer) GetStatus(context.Context, *StatusRequest) (*ServiceStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
 }
 func (UnimplementedNewsScreenServiceServer) mustEmbedUnimplementedNewsScreenServiceServer() {}
 func (UnimplementedNewsScreenServiceServer) testEmbeddedByValue()                           {}
@@ -138,6 +154,24 @@ func _NewsScreenService_AddAlert_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NewsScreenService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NewsScreenServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NewsScreenService_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NewsScreenServiceServer).GetStatus(ctx, req.(*StatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NewsScreenService_ServiceDesc is the grpc.ServiceDesc for NewsScreenService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var NewsScreenService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddAlert",
 			Handler:    _NewsScreenService_AddAlert_Handler,
+		},
+		{
+			MethodName: "GetStatus",
+			Handler:    _NewsScreenService_GetStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

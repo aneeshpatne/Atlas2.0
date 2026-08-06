@@ -5,8 +5,17 @@ import (
 	"time"
 )
 
+type Severity string
+
+const (
+	SeverityInfo     Severity = "info"
+	SeverityWarning  Severity = "warning"
+	SeverityCritical Severity = "critical"
+)
+
 type Alert struct {
 	OperationID, Color, Message string
+	Severity                    Severity
 	ReceivedAt                  time.Time
 }
 
