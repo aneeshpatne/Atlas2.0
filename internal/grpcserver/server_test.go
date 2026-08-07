@@ -57,6 +57,9 @@ func (l *testLifecycle) NotifyNewsChanged(context.Context) error {
 	l.changed++
 	return l.err
 }
+func (l *testLifecycle) Snapshot(context.Context) (supervisor.State, error) {
+	return supervisor.State{Lifecycle: supervisor.StateRunning, DesiredOn: true}, l.err
+}
 func newClient(t *testing.T, l *testLifecycle, s *testStore) (screenv1.NewsScreenServiceClient, func()) {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -75,13 +78,18 @@ func TestGRPCAddNewsAndQueuedAlerts(t *testing.T) {
 	client, closeFn := newClient(t, l, store)
 	defer closeFn()
 	ctx := context.Background()
-	ack, err := client.AddNews(ctx, &screenv1.NewsItem{Title: "Title", Genre: "india"})
+	ack, err := client.AddNews(ctx, &screenv1.NewsItem{Title: " Title ", Genre: " India "})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ack.Accepted || ack.State != "stored" || ack.OperationId == "" {
+	if !ack.Accepted || ack.State != "stored" || ack.CommandState != screenv1.CommandState_COMMAND_STATE_STORED || ack.OperationId == "" {
 		t.Fatalf("bad ack %+v", ack)
 	}
+	store.mu.Lock()
+	if got := store.items[0]; got.Title != "Title" || got.Genre != "india" {
+		t.Fatalf("news was not normalized: %+v", got)
+	}
+	store.mu.Unlock()
 	first, err := client.AddAlert(ctx, &screenv1.Alert{Color: " red ", Message: " first "})
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +107,46 @@ func TestGRPCAddNewsAndQueuedAlerts(t *testing.T) {
 		t.Fatalf("alert was not trimmed: %+v", l.alerts[0])
 	}
 }
+
+func TestGRPCGetStatus(t *testing.T) {
+	l := &testLifecycle{}
+	client, closeFn := newClient(t, l, &testStore{})
+	defer closeFn()
+	got, err := client.GetStatus(context.Background(), &screenv1.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Lifecycle != screenv1.LifecycleState_LIFECYCLE_STATE_RUNNING || !got.DesiredOn {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+}
+
+func TestAddNewsRemainsAcceptedWhenRefreshSignalFails(t *testing.T) {
+	l := &testLifecycle{err: errors.New("supervisor busy")}
+	store := &testStore{}
+	client, closeFn := newClient(t, l, store)
+	defer closeFn()
+	ack, err := client.AddNews(context.Background(), &screenv1.NewsItem{Title: "Stored", Genre: "world"})
+	if err != nil || !ack.Accepted || ack.CommandState != screenv1.CommandState_COMMAND_STATE_STORED {
+		t.Fatalf("AddNews = %+v, %v", ack, err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.items) != 1 {
+		t.Fatalf("stored items = %d, want 1", len(store.items))
+	}
+}
+
+func TestBearerTokenValidation(t *testing.T) {
+	if !validBearerToken("Bearer secret", "secret") {
+		t.Fatal("valid token rejected")
+	}
+	for _, value := range []string{"secret", "bearer secret", "Bearer wrong", "Bearer secret extra"} {
+		if validBearerToken(value, "secret") {
+			t.Fatalf("invalid token accepted: %q", value)
+		}
+	}
+}
 func TestGRPCValidationAndErrorMapping(t *testing.T) {
 	l := &testLifecycle{}
 	client, closeFn := newClient(t, l, &testStore{})
@@ -107,7 +155,10 @@ func TestGRPCValidationAndErrorMapping(t *testing.T) {
 		name string
 		call func() error
 		code codes.Code
-	}{{"nil news", func() error { _, e := client.AddNews(context.Background(), nil); return e }, codes.InvalidArgument}, {"empty title", func() error { _, e := client.AddNews(context.Background(), &screenv1.NewsItem{Genre: "x"}); return e }, codes.InvalidArgument}, {"empty color", func() error { _, e := client.AddAlert(context.Background(), &screenv1.Alert{Message: "x"}); return e }, codes.InvalidArgument}, {"empty message", func() error { _, e := client.AddAlert(context.Background(), &screenv1.Alert{Color: "red"}); return e }, codes.InvalidArgument}}
+	}{{"nil news", func() error { _, e := client.AddNews(context.Background(), nil); return e }, codes.InvalidArgument}, {"empty title", func() error { _, e := client.AddNews(context.Background(), &screenv1.NewsItem{Genre: "x"}); return e }, codes.InvalidArgument}, {"bad severity", func() error {
+		_, e := client.AddAlert(context.Background(), &screenv1.Alert{Message: "x", Severity: screenv1.AlertSeverity(99)})
+		return e
+	}, codes.InvalidArgument}, {"empty message", func() error { _, e := client.AddAlert(context.Background(), &screenv1.Alert{Color: "red"}); return e }, codes.InvalidArgument}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := status.Code(tt.call()); got != tt.code {

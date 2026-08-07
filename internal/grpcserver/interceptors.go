@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -25,11 +26,12 @@ func UnaryInterceptor(logger *slog.Logger, defaultTimeout time.Duration) grpc.Un
 		started := time.Now()
 		requestID := ""
 		if values := metadata.ValueFromIncomingContext(ctx, "x-request-id"); len(values) > 0 {
-			requestID = values[0]
+			requestID = sanitizeRequestID(values[0])
 		}
 		if requestID == "" {
 			requestID = operationID()
 		}
+		_ = grpc.SetHeader(ctx, metadata.Pairs("x-request-id", requestID))
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Error("grpc panic recovered", "method", info.FullMethod, "request_id", requestID, "panic", recovered, "stack", string(debug.Stack()))
@@ -39,4 +41,17 @@ func UnaryInterceptor(logger *slog.Logger, defaultTimeout time.Duration) grpc.Un
 		}()
 		return handler(ctx, req)
 	}
+}
+
+func sanitizeRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return ""
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7e {
+			return ""
+		}
+	}
+	return value
 }
