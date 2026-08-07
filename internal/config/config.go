@@ -20,7 +20,6 @@ type Config struct {
 	AlertQueueCapacity             int
 	CommandQueueCapacity           int
 	AlertMessageMaxBytes           int
-	ShutdownDisplayOnServiceExit   bool
 	AllowAlertsOutsideActiveWindow bool
 }
 
@@ -29,7 +28,7 @@ func Default() Config {
 		NewsRefreshInterval: 15 * time.Minute, AlertDisplayDuration: 30 * time.Second,
 		WorkerStopTimeout: 5 * time.Second, OperationTimeout: 30 * time.Second,
 		StartupRetryCount: 3, StartupRetryDelay: time.Second,
-		GRPCListenAddress: ":50050", GRPCShutdownTimeout: 10 * time.Second,
+		GRPCListenAddress: "127.0.0.1:50050", GRPCShutdownTimeout: 10 * time.Second,
 		AlertQueueCapacity: 100, CommandQueueCapacity: 256, AlertMessageMaxBytes: 1000}
 }
 
@@ -63,6 +62,9 @@ func (c Config) Validate() error {
 	}
 	if c.StartupRetryCount <= 0 || c.StartupRetryDelay <= 0 {
 		return fmt.Errorf("startup retry settings must be positive")
+	}
+	if c.StartupRetryCount > 10 {
+		return fmt.Errorf("startup retry count must be at most 10")
 	}
 	if c.AlertQueueCapacity <= 0 || c.CommandQueueCapacity <= 0 || c.AlertMessageMaxBytes <= 0 {
 		return fmt.Errorf("queue capacities and message limit must be positive")

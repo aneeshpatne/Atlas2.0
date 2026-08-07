@@ -140,4 +140,3 @@ func TestRunClockUntilNilClockWaitsForRefresh(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
-

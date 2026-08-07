@@ -26,6 +26,7 @@ type Options struct {
 	Genre              string
 	FontPath           string
 	AssetsDir          string
+	AllowPrivateImages bool
 }
 
 type Worker struct {
@@ -50,6 +51,7 @@ func (w *Worker) Run(ctx context.Context, refreshNow <-chan struct{}) error {
 		Genre:              w.options.Genre,
 		FontPath:           w.options.FontPath,
 		AssetsDir:          w.options.AssetsDir,
+		AllowPrivateImages: w.options.AllowPrivateImages,
 		GenreHold:          w.options.GenreHold,
 		StoryHold:          w.options.StoryHold,
 		MaxStoriesPerGenre: w.options.MaxStoriesPerGenre,

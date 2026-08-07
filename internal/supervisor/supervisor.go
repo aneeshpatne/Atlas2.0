@@ -57,6 +57,7 @@ const (
 	cmdNewsStopped
 	cmdAlertFinished
 	cmdNewsStopTimedOut
+	cmdNewsRetry
 )
 
 type command struct {
@@ -66,6 +67,7 @@ type command struct {
 	err     error
 	run     uint64
 	reply   chan response
+	ctx     context.Context
 }
 type response struct {
 	result   AlertResult
@@ -79,7 +81,9 @@ type internalState struct {
 	alertCancel                                       context.CancelFunc
 	alerts                                            []alert.Alert
 	newsRun, alertRun                                 uint64
+	newsFailures                                      int
 	shuttingDown, temporaryAlertDisplay, newsStopping bool
+	forceStopDisplay                                  bool
 }
 
 type Supervisor struct {
@@ -89,8 +93,10 @@ type Supervisor struct {
 	presenter  alert.Presenter
 	logger     *slog.Logger
 	commands   chan command
+	internal   chan command
 	refreshNow chan struct{}
 	done       chan struct{}
+	stopResult chan error
 	appCtx     context.Context
 	cancel     context.CancelFunc
 	startOnce  sync.Once
@@ -101,7 +107,7 @@ func New(parent context.Context, cfg config.Config, d display.Controller, nw new
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Supervisor{cfg: cfg, display: d, news: nw, presenter: p, logger: logger, commands: make(chan command, cfg.CommandQueueCapacity), refreshNow: make(chan struct{}, 1), done: make(chan struct{}), appCtx: ctx, cancel: cancel}
+	return &Supervisor{cfg: cfg, display: d, news: nw, presenter: p, logger: logger, commands: make(chan command, cfg.CommandQueueCapacity), internal: make(chan command, 16), refreshNow: make(chan struct{}, 1), done: make(chan struct{}), stopResult: make(chan error, 1), appCtx: ctx, cancel: cancel}
 }
 func (s *Supervisor) Start()                    { s.startOnce.Do(func() { go s.loop() }) }
 func (s *Supervisor) Done() <-chan struct{}     { return s.done }
@@ -132,13 +138,13 @@ func (s *Supervisor) Snapshot(ctx context.Context) (State, error) {
 	return r.snapshot, err
 }
 func (s *Supervisor) Stop(ctx context.Context) error {
-	r, err := s.request(ctx, command{kind: cmdStop})
+	_, err := s.request(ctx, command{kind: cmdStop})
 	if err != nil {
 		return err
 	}
 	select {
-	case <-s.done:
-		return r.err
+	case err := <-s.stopResult:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -146,6 +152,7 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 
 func (s *Supervisor) request(ctx context.Context, c command) (response, error) {
 	c.reply = make(chan response, 1)
+	c.ctx = ctx
 	select {
 	case <-s.done:
 		return response{}, ErrShuttingDown
@@ -160,6 +167,13 @@ func (s *Supervisor) request(ctx context.Context, c command) (response, error) {
 		return response{}, ctx.Err()
 	case <-s.done:
 		return response{}, ErrShuttingDown
+	}
+}
+
+func (s *Supervisor) sendInternal(c command) {
+	select {
+	case s.internal <- c:
+	case <-s.done:
 	}
 }
 func (s *Supervisor) trySend(c command) bool {
@@ -183,16 +197,30 @@ func (s *Supervisor) loop() {
 	defer close(s.done)
 	st := internalState{State: State{Lifecycle: StateOff}}
 	for {
-		c := <-s.commands
+		var c command
+		select {
+		case c = <-s.internal:
+		case c = <-s.commands:
+		}
+		if c.ctx != nil {
+			if err := c.ctx.Err(); err != nil {
+				reply(c, response{err: err})
+				continue
+			}
+		}
+		var reconcileErr error
+		previousLifecycle := st.Lifecycle
 		switch c.kind {
 		case cmdStart:
 			st.DesiredOn = true
 		case cmdShutdown:
 			st.DesiredOn = false
+			st.forceStopDisplay = st.DisplayRunning
 			s.cancelAll(&st, true)
 		case cmdReconcile:
 			st.DesiredOn = c.desired
 			if !c.desired {
+				st.forceStopDisplay = true
 				s.cancelAll(&st, true)
 			}
 		case cmdNewsChanged, cmdNewsPass:
@@ -202,6 +230,7 @@ func (s *Supervisor) loop() {
 			if st.NewsRunning && !st.newsStopping {
 				select {
 				case s.refreshNow <- struct{}{}:
+					st.LastRefreshAt = time.Now()
 				default:
 				}
 			}
@@ -248,11 +277,25 @@ func (s *Supervisor) loop() {
 			st.newsCancel = nil
 			if c.err != nil && !errors.Is(c.err, context.Canceled) {
 				st.LastError = c.err.Error()
+				if st.DesiredOn && !st.shuttingDown {
+					st.newsFailures++
+					delay := retryDelay(st.newsFailures)
+					run := st.newsRun
+					time.AfterFunc(delay, func() { s.sendInternal(command{kind: cmdNewsRetry, run: run}) })
+					st.Lifecycle = StateFailed
+					s.logger.Error("news worker failed", "error", c.err, "retry_in", delay)
+					continue
+				}
 			}
+			st.newsFailures = 0
 		case cmdNewsStopTimedOut:
 			if c.run == st.newsRun && st.NewsRunning {
 				st.Lifecycle = StateFailed
 				st.LastError = ErrWorkerStopTimeout.Error()
+			}
+		case cmdNewsRetry:
+			if c.run != st.newsRun || !st.DesiredOn || st.shuttingDown || st.AlertRunning || len(st.alerts) > 0 {
+				continue
 			}
 		case cmdAlertFinished:
 			if c.run != st.alertRun {
@@ -270,46 +313,55 @@ func (s *Supervisor) loop() {
 		case cmdStop:
 			st.shuttingDown = true
 			st.DesiredOn = false
+			st.forceStopDisplay = true
 			s.cancelAll(&st, false)
 			reply(c, response{})
 			s.cancel()
 		}
-		s.reconcile(&st)
+		reconcileErr = s.reconcile(&st)
+		if st.Lifecycle != previousLifecycle {
+			s.logger.Info("lifecycle transition", "from", previousLifecycle, "to", st.Lifecycle, "desired_on", st.DesiredOn, "queued_alerts", st.QueuedAlerts)
+		}
 		switch c.kind {
 		case cmdStart, cmdShutdown, cmdReconcile, cmdNewsChanged:
-			reply(c, response{snapshot: st.State})
+			reply(c, response{snapshot: st.State, err: reconcileErr})
 		}
 		if st.shuttingDown && !st.NewsRunning && !st.AlertRunning {
 			// Always clear the panel and zero brightness on process exit
 			// (SIGTERM/SIGINT), matching scheduled window end.
-			s.stopDisplay(&st)
+			err := s.stopDisplay(&st)
+			s.stopResult <- err
 			return
 		}
 	}
 }
 
-func (s *Supervisor) reconcile(st *internalState) {
+func (s *Supervisor) reconcile(st *internalState) error {
 	if st.shuttingDown {
-		return
+		return nil
 	}
 	wantDisplay := st.DesiredOn || (st.temporaryAlertDisplay && (st.AlertRunning || len(st.alerts) > 0))
 	if !wantDisplay {
 		s.cancelAll(st, true)
 		if st.NewsRunning || st.AlertRunning {
-			return
+			return nil
 		}
-		s.stopDisplay(st)
+		if st.DisplayRunning || st.forceStopDisplay {
+			if err := s.stopDisplay(st); err != nil {
+				return err
+			}
+		}
 		st.Lifecycle = StateOff
-		return
+		return nil
 	}
 	if !st.DisplayRunning {
-		if !s.startDisplay(st) {
-			return
+		if err := s.startDisplay(st); err != nil {
+			return err
 		}
 	}
 	if st.AlertRunning {
 		st.Lifecycle = StateAlerting
-		return
+		return nil
 	}
 	if len(st.alerts) > 0 {
 		if st.NewsRunning {
@@ -317,26 +369,29 @@ func (s *Supervisor) reconcile(st *internalState) {
 				s.stopNews(st)
 			}
 			st.Lifecycle = StatePausing
-			return
+			return nil
 		}
 		item := st.alerts[0]
 		st.alerts = st.alerts[1:]
 		st.QueuedAlerts = len(st.alerts)
 		s.startAlert(st, item)
-		return
+		return nil
 	}
 	if st.temporaryAlertDisplay {
 		st.temporaryAlertDisplay = false
-		s.stopDisplay(st)
+		if err := s.stopDisplay(st); err != nil {
+			return err
+		}
 		st.Lifecycle = StateOff
-		return
+		return nil
 	}
 	if st.DesiredOn && !st.NewsRunning {
 		s.startNews(st)
 	}
+	return nil
 }
 
-func (s *Supervisor) startDisplay(st *internalState) bool {
+func (s *Supervisor) startDisplay(st *internalState) error {
 	st.Lifecycle = StateStarting
 	var err error
 	for i := 0; i < s.cfg.StartupRetryCount; i++ {
@@ -346,7 +401,7 @@ func (s *Supervisor) startDisplay(st *internalState) bool {
 		if err == nil {
 			st.DisplayRunning = true
 			st.LastStartedAt = time.Now()
-			return true
+			return nil
 		}
 		if !wait(s.appCtx, s.cfg.StartupRetryDelay<<i) {
 			break
@@ -354,9 +409,9 @@ func (s *Supervisor) startDisplay(st *internalState) bool {
 	}
 	st.Lifecycle = StateFailed
 	st.LastError = fmt.Sprintf("start display: %v", err)
-	return false
+	return errors.New(st.LastError)
 }
-func (s *Supervisor) stopDisplay(st *internalState) {
+func (s *Supervisor) stopDisplay(st *internalState) error {
 	// Always invoke Stop so clear + brightness 0 run even if our flag is stale
 	// (e.g. display was already on when the process started).
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.OperationTimeout)
@@ -365,10 +420,12 @@ func (s *Supervisor) stopDisplay(st *internalState) {
 	if err != nil {
 		st.LastError = err.Error()
 		st.Lifecycle = StateFailed
-		return
+		return err
 	}
 	st.DisplayRunning = false
+	st.forceStopDisplay = false
 	st.LastStoppedAt = time.Now()
+	return nil
 }
 func (s *Supervisor) startNews(st *internalState) {
 	if st.NewsRunning {
@@ -385,7 +442,7 @@ func (s *Supervisor) startNews(st *internalState) {
 	// pass (or NotifyNewsChanged). startNews only starts the worker loop.
 	go func() {
 		err := s.news.Run(ctx, s.refreshNow)
-		s.trySend(command{kind: cmdNewsStopped, err: err, run: run})
+		s.sendInternal(command{kind: cmdNewsStopped, err: err, run: run})
 	}()
 }
 func (s *Supervisor) stopNews(st *internalState) {
@@ -396,7 +453,7 @@ func (s *Supervisor) stopNews(st *internalState) {
 	st.Lifecycle = StatePausing
 	st.newsCancel()
 	run := st.newsRun
-	time.AfterFunc(s.cfg.WorkerStopTimeout, func() { s.trySend(command{kind: cmdNewsStopTimedOut, run: run}) })
+	time.AfterFunc(s.cfg.WorkerStopTimeout, func() { s.sendInternal(command{kind: cmdNewsStopTimedOut, run: run}) })
 }
 func (s *Supervisor) startAlert(st *internalState, item alert.Alert) {
 	ctx, cancel := context.WithCancel(s.appCtx)
@@ -408,8 +465,16 @@ func (s *Supervisor) startAlert(st *internalState, item alert.Alert) {
 	st.Lifecycle = StateAlerting
 	go func() {
 		err := alert.Run(ctx, s.presenter, item, s.cfg.AlertDisplayDuration, min(s.cfg.OperationTimeout, 2*time.Second))
-		s.trySend(command{kind: cmdAlertFinished, err: err, run: run})
+		s.sendInternal(command{kind: cmdAlertFinished, err: err, run: run})
 	}()
+}
+
+func retryDelay(failures int) time.Duration {
+	if failures < 1 {
+		return time.Second
+	}
+	shift := min(failures-1, 6)
+	return min(time.Second*time.Duration(1<<shift), time.Minute)
 }
 func (s *Supervisor) cancelAll(st *internalState, scheduled bool) {
 	if st.newsCancel != nil {
