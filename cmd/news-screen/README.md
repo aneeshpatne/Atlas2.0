@@ -1,7 +1,7 @@
 # News screen service
 
 This command runs the timezone-aware scheduler, the single-owner lifecycle
-supervisor, and the two-method gRPC API. It uses the existing Redis news queues
+supervisor, and the news/alert/status gRPC API. It uses the existing Redis news queues
 and Kindle SSH controller.
 
 ```bash
@@ -43,9 +43,14 @@ and story holds.
   background. If ogurl is missing or the download fails, the same genre asset
   is used as a fallback so stories still have a photo background.
 
-The service expects the Kindle key at `~/.ssh/id_ed25519`. Bind gRPC to a trusted
-interface only; deployments exposing it beyond a private network must add mTLS,
-bearer-token authentication, or service-mesh identity.
+The service defaults to `~/.ssh/id_ed25519` and strict host verification through
+`~/.ssh/known_hosts`; both paths and the SSH user are configurable. gRPC binds to
+loopback by default. Non-loopback binds require TLS plus either a bearer token
+or client-certificate verification through `-grpc-client-ca`.
+
+Story image downloads require public HTTPS destinations and re-check every
+redirect. `-image-allow-private` relaxes the address restriction for trusted
+private image servers and should not be enabled for untrusted ingestion.
 
 News is persisted in the existing Redis store. The bounded alert FIFO is
 intentionally in memory, so accepted alerts that have not finished are lost if

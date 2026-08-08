@@ -20,7 +20,7 @@ Atlas drives an e-ink Kindle over SSH: a live clock by default, genre-wise news 
 
 Atlas accepts news stories and short alerts, stores stories in Redis by genre, and paints them on a jailbroken Kindle over SSH. During the active daily window the device shows a live clock; on each configured wall-clock boundary it runs a genre-wise news pass (title screens, then stories with photo backgrounds), then restores the clock. Alerts can pause news, display a message for a fixed duration, and release the display back to the normal lifecycle. The result is a wall-mounted editorial screen that updates without apps, browsers, or a continuous GUI process on the Kindle itself.
 
-The primary long-running binary is `cmd/news-screen`: timezone-aware cron scheduling, a single-owner lifecycle supervisor, and a two-RPC gRPC API. A simpler root CLI (`app.go`) supports one-shot `clock`, `story`, and continuous `news` modes for development and manual control. Rendering uses [fbink](https://github.com/NiLuJe/FBInk) on the device; the host uses system OpenSSH (not a pure-Go dial) so macOS LaunchAgents can reach LAN Kindles. Layouts are resolution-relative so the same code can target different Kindle panel sizes.
+The primary long-running binary is `cmd/news-screen`: timezone-aware cron scheduling, a single-owner lifecycle supervisor, and a gRPC API for news, alerts, and status. A simpler root CLI (`app.go`) supports one-shot `clock`, `story`, and continuous `news` modes for development and manual control. Rendering uses [fbink](https://github.com/NiLuJe/FBInk) on the device; the host uses system OpenSSH (not a pure-Go dial) so macOS LaunchAgents can reach LAN Kindles. Layouts are resolution-relative so the same code can target different Kindle panel sizes.
 
 ## Features
 
@@ -30,8 +30,8 @@ The primary long-running binary is `cmd/news-screen`: timezone-aware cron schedu
 | **Clock as default UI** | Live `HH:MM` clock with date chrome; minute-boundary updates use a single non-flashing GC16 regional refresh to limit ghosting. |
 | **Genre-wise news passes** | Wall-clock cron (default every 15 minutes at `:00/:15/:30/:45`) walks Redis genres: genre title screen, then up to N stories per genre (default 10), each held for a configurable duration. |
 | **Story presentation** | Editorial layout: genre label, title, description, source domains. Prefers Open Graph images as full-screen backgrounds; falls back to genre assets under `assets/genres`. |
-| **Redis news queues** | Stories are RPUSHed per genre; display rotates with LMOVE (no delete), so queues survive passes and restarts. Genres tracked in a Redis set. |
-| **gRPC ingestion** | `NewsScreenService` with `AddNews` and `AddAlert`. Validation, operation IDs, structured logging, panic recovery, and default request timeouts. |
+| **Redis news queues** | Normalized genre queues are bounded (default 100), deduplicated for 24 hours, rotated with LMOVE, and protected by a poison-item dead letter. Genres are displayed deterministically. |
+| **gRPC API** | `AddNews`, `AddAlert`, and `GetStatus`, plus standard gRPC health. Includes field validation, operation IDs, structured logging, panic recovery, deadlines, optional bearer authentication, and TLS/mTLS. |
 | **Alert FIFO** | Bounded in-memory queue (default capacity 100). Alerts interrupt news, display for a fixed duration (default 30s), then resume the lifecycle. Rejected when full or when the service is shutting down. |
 | **Lifecycle supervisor** | Single-owner state machine (`off` → `starting` → `running` / `pausing` / `alerting` → `stopping` / `failed`) owns display power, news worker, and alert presentation—no competing writers. |
 | **CLI modes** | Root binary: `clock`, `story` (JSON from file or stdin), and `news` (continuous Redis-driven loop) for local control without the full service. |
@@ -40,9 +40,9 @@ The primary long-running binary is `cmd/news-screen`: timezone-aware cron schedu
 > [!NOTE]
 > **Completed:** news-screen service (scheduler, supervisor, gRPC), Redis news store, genre/story painting, clock default between passes, alert queue, CLI modes, unit tests for core packages.
 >
-> **Partial / placeholder:** clock dashboard climate row and metric columns (TEMP, PRESS, HUMID, PM2.5) currently use fixed dummy values until live sensors are wired in.
+> **Partial / placeholder:** clock dashboard climate and metric columns show `--` until a `MetricsProvider` is wired to live sensors.
 >
-> **Operational gaps (by design or deferred):** alert FIFO is in-memory only—accepted but unfinished alerts are lost on process crash; scheduled desired-on state is reconstructed from the clock on every boot; gRPC has no authentication (bind to a trusted interface or terminate TLS/identity at the edge).
+> **Operational gaps (by design or deferred):** alert FIFO is in-memory only—accepted but unfinished alerts are lost on process crash; scheduled desired-on state is reconstructed from the clock on every boot. gRPC binds to loopback by default and supports bearer-token and TLS configuration for broader exposure.
 
 ## From input to result
 
@@ -173,7 +173,7 @@ flowchart TB
 ├── cmd/news-screen/            # Long-running service entrypoint
 │   ├── main.go
 │   └── README.md               # Service-specific flags and lifecycle notes
-├── api/proto/screen/v1/        # Protobuf sources (AddNews, AddAlert)
+├── api/proto/screen/v1/        # Protobuf sources (news, alerts, status)
 ├── gen/screen/v1/              # Generated pb / gRPC stubs
 ├── assets/genres/              # Genre backdrop images (india, mumbai, world, misc)
 ├── internal/
@@ -182,10 +182,10 @@ flowchart TB
 │   ├── scheduler/              # Daily window + news-pass cron specs
 │   ├── grpcserver/             # RPC handlers + unary interceptor
 │   ├── news/                   # Redis store and Story types
-│   ├── screennews/             # Repository adapters (Redis / memory)
+│   ├── screennews/             # Protobuf-to-domain Redis ingestion adapter
 │   ├── dashboard/              # Genre cycles and story draining
 │   ├── newsworkflow/           # Clock-default loop + pass signals
-│   ├── newsworker/             # Interval refresher worker (interface/impl)
+│   ├── newsworker/             # Supervisor-facing worker interface
 │   ├── kindle/                 # Device commands, clock, story, genre paint
 │   ├── kindledisplay/          # display.Controller + alert presenter
 │   ├── display/                # Controller interface
@@ -201,10 +201,11 @@ flowchart TB
 - **Redis** reachable at the address you pass (default `localhost:6379`)
 - **Jailbroken Kindle** with:
   - SSH as `root` (default address `192.168.0.10:22`)
-  - Private key at `~/.ssh/id_ed25519` (hard-coded path in both entrypoints)
+  - Private key at `~/.ssh/id_ed25519` by default (configurable with `-ssh-key`)
+  - A matching entry in `~/.ssh/known_hosts` (or explicit development-only `-ssh-insecure-host-key`)
   - [fbink](https://github.com/NiLuJe/FBInk) at `/mnt/us/usbnet/bin/fbink`
   - Fonts used by rendering (e.g. `/mnt/us/fonts/InstrumentSerif-Regular.ttf`, optional Helvetica under `/usr/java/lib/fonts/`)
-- **Network access** from the host to the Kindle (LAN); for story backgrounds, outbound HTTP(S) to fetch Open Graph images
+- **Network access** from the host to the Kindle (LAN); for story backgrounds, outbound HTTPS to fetch public Open Graph images
 - **Genre assets directory** (default `assets/genres`) present when running news-screen
 
 **Not required for unit tests:** a physical Kindle or Redis (tests use fakes and pure logic). **Required for real display:** reachable Kindle + key; **for news mode / service:** Redis as well. The service is intended to run on a host machine that keeps SSH open to the device, not on the Kindle itself.
@@ -269,7 +270,7 @@ flowchart TB
    ```
 
 > [!IMPORTANT]
-> Defaults include a LAN Kindle address (`192.168.0.10:22`), unauthenticated gRPC (`:50050` / `127.0.0.1:50050` in examples), and a fixed root SSH key path. Replace these for your network before any shared or production deployment. The service README notes that exposing gRPC beyond a private network requires mTLS, bearer tokens, or mesh identity—none of which are implemented in-tree.
+> gRPC binds to `127.0.0.1:50050` by default. A non-loopback bind requires TLS plus either `-grpc-token-file` or mutual TLS (`-grpc-client-ca`). SSH host verification is strict by default; the user, key, and known-hosts file are configurable.
 
 ## Running tests
 
@@ -286,17 +287,15 @@ go test ./internal/supervisor -v
 go test ./internal/kindle -count=1
 ```
 
-**What the suite covers:** config validation; scheduler window and cron specs; supervisor alert FIFO and shutdown; gRPC validation and error mapping; newsworkflow clock/pass signalling; newsworker interval behavior; dashboard backdrop fallback and story mapping; kindle clock/story rendering paths with fake SSH runners. Packages without tests (SSH client, Redis client, kindledisplay, main packages) are excluded from coverage by absence of `*_test.go` files.
+**What the suite covers:** config and scheduler behavior; supervisor FIFO, cancellation, backoff, and shutdown; gRPC validation, authentication primitives, status, and error mapping; newsworkflow signaling; backdrop/story rendering; SSH quoting and cancellation; and opt-in Redis integration behavior. Set `ATLAS_TEST_REDIS_ADDR` to run the Redis integration test locally.
 
-No separate CI configuration is checked into this repository; local `go test ./...` is the supported verification path.
+GitHub Actions runs formatting, vet, unit and Redis integration tests, the race detector, coverage, vulnerability scanning, and generated-protobuf drift checks.
 
 ## Roadmap
 
-- Wire live sensor data into the clock climate row and TEMP / PRESS / HUMID / PM2.5 columns (currently dummy values).
+- Wire a live sensor implementation into the clock's `MetricsProvider` interface.
 - Optional durable alert queue so accepted alerts survive process restarts.
-- Authentication and TLS for the gRPC surface (or documented reverse-proxy requirements).
-- Configurable SSH key path and username instead of hard-coded `root` + `~/.ssh/id_ed25519`.
-- Broader integration tests against Redis and a mocked SSH device end-to-end.
+- End-to-end tests against a complete fake Kindle/fbink environment.
 
 ## License
 
