@@ -29,20 +29,20 @@ The primary long-running binary is `cmd/news-screen`: timezone-aware cron schedu
 | **Scheduled display window** | Daily start/stop in a configured timezone (default 07:00–23:00 Asia/Kolkata). Outside the window the panel is cleared and backlight is set to 0. |
 | **Clock as default UI** | Live `HH:MM` clock with date chrome; minute-boundary updates use a single non-flashing GC16 regional refresh to limit ghosting. |
 | **Genre-wise news passes** | Wall-clock cron (default every 15 minutes at `:00/:15/:30/:45`) walks Redis genres: genre title screen, then up to N stories per genre (default 10), each held for a configurable duration. |
-| **Story presentation** | Editorial layout: genre label, title, description, source domains. Prefers Open Graph images as full-screen backgrounds; falls back to genre assets under `assets/genres`. |
-| **Redis news queues** | Normalized genre queues are bounded (default 100), deduplicated for 24 hours, rotated with LMOVE, and protected by a poison-item dead letter. Genres are displayed deterministically. |
-| **gRPC API** | `AddNews`, `AddAlert`, and `GetStatus`, plus standard gRPC health. Includes field validation, operation IDs, structured logging, panic recovery, deadlines, optional bearer authentication, and TLS/mTLS. |
-| **Alert FIFO** | Bounded in-memory queue (default capacity 100). Alerts interrupt news, display for a fixed duration (default 30s), then resume the lifecycle. Rejected when full or when the service is shutting down. |
-| **Lifecycle supervisor** | Single-owner state machine (`off` → `starting` → `running` / `pausing` / `alerting` → `stopping` / `failed`) owns display power, news worker, and alert presentation—no competing writers. |
-| **CLI modes** | Root binary: `clock`, `story` (JSON from file or stdin), and `news` (continuous Redis-driven loop) for local control without the full service. |
-| **Device control over SSH** | Rotation, backlight, clear, text, and image upload via OpenSSH + fbink. Startup fails fast if the Kindle is unreachable. |
+| **Story presentation** | Editorial layout: genre label, title, description, source domains. Prefers Open Graph images as full-screen backgrounds; falls back to genre assets under `assets/genres`. Story image fetches require public HTTPS by default (SSRF-safe); `-image-allow-private` is opt-in for trusted private hosts. |
+| **Redis news queues** | Normalized genre queues are bounded (`-news-queue-limit`, default 100), deduplicated for 24 hours, rotated with LMOVE, and protected by a poison-item dead letter. Optional `-redis-password-file`, `-redis-db`, and `-redis-prefix` for auth, database selection, and key namespacing. |
+| **gRPC API** | `AddNews`, `AddAlert`, and `GetStatus` (lifecycle, desired-on, worker flags, queue depth, last error/timestamps), plus standard gRPC health. Field validation, operation IDs / `CommandState`, alert `Severity`, structured logging, panic recovery, deadlines, bearer auth, and TLS/mTLS. |
+| **Alert FIFO** | Bounded in-memory queue (default capacity 100). Alerts carry severity (`info` / `warning` / `critical`), interrupt news, display for a fixed duration (default 30s), then resume the lifecycle. Rejected when full or when the service is shutting down. |
+| **Lifecycle supervisor** | Single-owner state machine (`off` → `starting` → `running` / `pausing` / `alerting` → `stopping` / `failed`) owns display power, news worker, and alert presentation—no competing writers. Start failures retry with backoff. |
+| **CLI modes** | Root binary: `clock`, `story` (JSON from file or stdin), and `news` (continuous Redis-driven loop) for local control without the full service. Shares SSH/Redis/image policy flags with the service. |
+| **Device control over SSH** | Rotation, backlight, clear, text, and image upload via system OpenSSH + fbink. Strict host-key verification via `known_hosts` by default; user, key path, and known-hosts file are configurable. Startup fails fast if the Kindle is unreachable. |
 
 > [!NOTE]
-> **Completed:** news-screen service (scheduler, supervisor, gRPC), Redis news store, genre/story painting, clock default between passes, alert queue, CLI modes, unit tests for core packages.
+> **Completed:** news-screen service (scheduler, supervisor, gRPC with `GetStatus`/severity), Redis news store (prefix/limit options), genre/story painting with public-image policy, clock default between passes, alert queue, OpenSSH host-key controls, bearer/TLS hardening for non-loopback gRPC, CLI modes, CI, and unit/integration tests for core packages.
 >
 > **Partial / placeholder:** clock dashboard climate and metric columns show `--` until a `MetricsProvider` is wired to live sensors.
 >
-> **Operational gaps (by design or deferred):** alert FIFO is in-memory only—accepted but unfinished alerts are lost on process crash; scheduled desired-on state is reconstructed from the clock on every boot. gRPC binds to loopback by default and supports bearer-token and TLS configuration for broader exposure.
+> **Operational gaps (by design or deferred):** alert FIFO is in-memory only—accepted but unfinished alerts are lost on process crash; scheduled desired-on state is reconstructed from the clock on every boot.
 
 ## From input to result
 
@@ -90,7 +90,7 @@ flowchart TD
   News --> Story[Story card]
   Story --> Title[Title / description / sources]
   Story --> BG[OG image or genre fallback]
-  Alerts --> Msg[Full-screen message]
+  Alerts --> Msg[Full-screen message + severity]
 ```
 
 Genre backdrop files ship under `assets/genres` (`india`, `mumbai`, `world`, `misc`; matching is case-insensitive; unknown genres use `misc`).
@@ -147,8 +147,9 @@ flowchart TB
 - **Single owner for lifecycle:** only the supervisor mutates display/news/alert run state via a command channel; external callers (`Reconcile`, `AddAlert`, cron hooks) send commands and wait for replies.
 - **Interfaces at the edges:** `display.Controller`, `newsworker.Worker`, and `alert.Presenter` keep device and refresh strategies swappable for tests.
 - **Redis is the news source of truth;** alerts are intentionally not durable.
-- **SSH via system OpenSSH** so LaunchAgents on macOS can reach LAN hosts without a Go TCP dial (which hits Local Network TCC restrictions).
-- **gRPC unary interceptor** applies a default timeout when the client omits a deadline, logs request IDs, and recovers panics.
+- **SSH via system OpenSSH** (not a pure-Go SSH stack) so LaunchAgents on macOS can reach LAN hosts without a Go TCP dial (which hits Local Network TCC restrictions). Host keys are verified against `known_hosts` unless `-ssh-insecure-host-key` is set for local development.
+- **gRPC interceptors** apply a default timeout when the client omits a deadline, log request IDs, recover panics, and optionally enforce bearer tokens (`-grpc-token-file`, minimum 32 characters). Non-loopback binds also require TLS and either a bearer token or mTLS (`-grpc-client-ca`).
+- **Story image fetches** validate public destinations (and re-check redirects) unless `-image-allow-private` is enabled.
 - **Protobuf is generated** into `gen/`; edit `api/proto` and regenerate—do not hand-edit stubs.
 
 ## Tech stack
@@ -159,11 +160,12 @@ flowchart TB
 | API | [gRPC](https://grpc.io/) + [Protocol Buffers](https://protobuf.dev/) (`google.golang.org/grpc`, `protobuf`) |
 | Persistence | [Redis](https://redis.io/) via [go-redis/v9](https://github.com/redis/go-redis) |
 | Scheduling | [robfig/cron/v3](https://github.com/robfig/cron) (timezone-aware) |
-| Device transport | System OpenSSH (`/usr/bin/ssh` preferred); [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) present as a module dependency |
-| Imaging | [golang.org/x/image](https://pkg.go.dev/golang.org/x/image) (JPEG/GIF/WebP decode, story background prep) |
+| Device transport | System OpenSSH only (`/usr/bin/ssh` preferred, `PATH` fallback)—no pure-Go SSH library |
+| Imaging | [golang.org/x/image](https://pkg.go.dev/golang.org/x/image) (JPEG/GIF/WebP decode, story background prep, e-ink tone mapping) |
 | On-device UI | [fbink](https://github.com/NiLuJe/FBInk) over SSH; Instrument Serif / Helvetica fonts on the Kindle |
 | Logging | `log/slog` JSON handler in the service binary |
-| Testing | Go standard library `testing` |
+| CI | GitHub Actions: `gofmt`, `go vet`, unit/race/coverage tests (Redis service), `govulncheck`, generated-proto drift check |
+| Testing | Go standard library `testing` (unit + opt-in Redis integration via `ATLAS_TEST_REDIS_ADDR`) |
 
 ## Project structure
 
@@ -172,16 +174,18 @@ flowchart TB
 ├── app.go                      # CLI: clock | story | news
 ├── cmd/news-screen/            # Long-running service entrypoint
 │   ├── main.go
+│   ├── main_test.go
 │   └── README.md               # Service-specific flags and lifecycle notes
 ├── api/proto/screen/v1/        # Protobuf sources (news, alerts, status)
 ├── gen/screen/v1/              # Generated pb / gRPC stubs
 ├── assets/genres/              # Genre backdrop images (india, mumbai, world, misc)
+├── .github/workflows/ci.yml    # Format, vet, test, race, coverage, vuln, proto check
 ├── internal/
 │   ├── config/                 # Defaults, validation, timeouts
 │   ├── supervisor/             # Single-owner lifecycle state machine
 │   ├── scheduler/              # Daily window + news-pass cron specs
-│   ├── grpcserver/             # RPC handlers + unary interceptor
-│   ├── news/                   # Redis store and Story types
+│   ├── grpcserver/             # RPC handlers, bearer auth, unary interceptors
+│   ├── news/                   # Redis store (prefix/limit options) and Story types
 │   ├── screennews/             # Protobuf-to-domain Redis ingestion adapter
 │   ├── dashboard/              # Genre cycles and story draining
 │   ├── newsworkflow/           # Clock-default loop + pass signals
@@ -189,8 +193,8 @@ flowchart TB
 │   ├── kindle/                 # Device commands, clock, story, genre paint
 │   ├── kindledisplay/          # display.Controller + alert presenter
 │   ├── display/                # Controller interface
-│   ├── alert/                  # Alert model and timed presentation
-│   ├── sshclient/              # OpenSSH wrapper
+│   ├── alert/                  # Alert model (severity) and timed presentation
+│   ├── sshclient/              # OpenSSH wrapper (context APIs, known_hosts)
 │   └── redis/                  # Thin Redis client
 └── story.json                  # Sample story payload for CLI story mode
 ```
@@ -200,15 +204,16 @@ flowchart TB
 - **Go** 1.26+ (module declares `go 1.26.4`)
 - **Redis** reachable at the address you pass (default `localhost:6379`)
 - **Jailbroken Kindle** with:
-  - SSH as `root` (default address `192.168.0.10:22`)
-  - Private key at `~/.ssh/id_ed25519` by default (configurable with `-ssh-key`)
-  - A matching entry in `~/.ssh/known_hosts` (or explicit development-only `-ssh-insecure-host-key`)
+  - SSH reachable at the configured address (default `192.168.0.10:22`) and user (default `root` via `-ssh-user`)
+  - Private key at `~/.ssh/id_ed25519` by default (`-ssh-key`)
+  - A matching entry in `~/.ssh/known_hosts` by default (`-ssh-known-hosts`); use `-ssh-insecure-host-key` only for local development
   - [fbink](https://github.com/NiLuJe/FBInk) at `/mnt/us/usbnet/bin/fbink`
   - Fonts used by rendering (e.g. `/mnt/us/fonts/InstrumentSerif-Regular.ttf`, optional Helvetica under `/usr/java/lib/fonts/`)
-- **Network access** from the host to the Kindle (LAN); for story backgrounds, outbound HTTPS to fetch public Open Graph images
+- **Network access** from the host to the Kindle (LAN); for story backgrounds, outbound HTTPS to fetch **public** Open Graph images (private/link-local destinations are blocked unless `-image-allow-private` is set)
 - **Genre assets directory** (default `assets/genres`) present when running news-screen
+- **Optional secrets as files:** Redis password (`-redis-password-file`) and gRPC bearer token (`-grpc-token-file`) must be readable files; the service rejects world/group-readable secret files
 
-**Not required for unit tests:** a physical Kindle or Redis (tests use fakes and pure logic). **Required for real display:** reachable Kindle + key; **for news mode / service:** Redis as well. The service is intended to run on a host machine that keeps SSH open to the device, not on the Kindle itself.
+**Not required for unit tests:** a physical Kindle or Redis (tests use fakes and pure logic). **Required for real display:** reachable Kindle + key; **for news mode / service:** Redis as well. Set `ATLAS_TEST_REDIS_ADDR` to exercise the Redis integration test. The service is intended to run on a host machine that keeps SSH open to the device, not on the Kindle itself.
 
 ## Getting started
 
@@ -242,11 +247,31 @@ flowchart TB
    ```bash
    go run ./cmd/news-screen \
      -kindle-address 192.168.0.10:22 \
+     -ssh-user root \
+     -ssh-key ~/.ssh/id_ed25519 \
+     -ssh-known-hosts ~/.ssh/known_hosts \
      -redis localhost:6379 \
      -timezone Asia/Kolkata \
      -grpc 127.0.0.1:50050 \
      -news-refresh 15m \
      -news-per-genre 10 \
+     -news-queue-limit 100 \
+     -assets assets/genres
+   ```
+
+   Optional hardening / multi-tenant Redis:
+
+   ```bash
+   go run ./cmd/news-screen \
+     -kindle-address 192.168.0.10:22 \
+     -redis redis.example:6379 \
+     -redis-password-file /run/secrets/redis_password \
+     -redis-db 1 \
+     -redis-prefix atlas:prod: \
+     -grpc 0.0.0.0:50050 \
+     -grpc-tls-cert /etc/atlas/tls.crt \
+     -grpc-tls-key /etc/atlas/tls.key \
+     -grpc-token-file /run/secrets/grpc_token \
      -assets assets/genres
    ```
 
@@ -270,7 +295,7 @@ flowchart TB
    ```
 
 > [!IMPORTANT]
-> gRPC binds to `127.0.0.1:50050` by default. A non-loopback bind requires TLS plus either `-grpc-token-file` or mutual TLS (`-grpc-client-ca`). SSH host verification is strict by default; the user, key, and known-hosts file are configurable.
+> gRPC binds to `127.0.0.1:50050` by default. A non-loopback bind requires **TLS** plus either `-grpc-token-file` (token ≥ 32 characters) or mutual TLS (`-grpc-client-ca`). SSH host verification is strict by default (`-ssh-known-hosts`); `-ssh-insecure-host-key` disables it for development only. Story image downloads reject private/local destinations unless `-image-allow-private` is set.
 
 ## Running tests
 
@@ -287,9 +312,9 @@ go test ./internal/supervisor -v
 go test ./internal/kindle -count=1
 ```
 
-**What the suite covers:** config and scheduler behavior; supervisor FIFO, cancellation, backoff, and shutdown; gRPC validation, authentication primitives, status, and error mapping; newsworkflow signaling; backdrop/story rendering; SSH quoting and cancellation; and opt-in Redis integration behavior. Set `ATLAS_TEST_REDIS_ADDR` to run the Redis integration test locally.
+**What the suite covers:** config and scheduler behavior; supervisor FIFO, cancellation, backoff, and shutdown; gRPC validation, bearer auth, `GetStatus`, and error mapping; newsworkflow signaling; backdrop/story rendering and public-image policy; SSH quoting, host/port validation, and context cancellation; and opt-in Redis integration (prefix/limit/dedupe). Set `ATLAS_TEST_REDIS_ADDR` (for example `127.0.0.1:6379`) to run the Redis integration test locally.
 
-GitHub Actions runs formatting, vet, unit and Redis integration tests, the race detector, coverage, vulnerability scanning, and generated-protobuf drift checks.
+GitHub Actions (`.github/workflows/ci.yml`) runs formatting, vet, unit tests against a Redis service, the race detector, coverage, `govulncheck`, and a generated-protobuf drift check.
 
 ## Roadmap
 
