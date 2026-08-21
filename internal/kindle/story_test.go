@@ -280,6 +280,22 @@ func TestEinkTonePreservesShadowDetailAndCapsHighlights(t *testing.T) {
 	}
 }
 
+func TestEnhanceLocalContrastPreservesDetailInDarkOutput(t *testing.T) {
+	source := image.NewGray(image.Rect(0, 0, 5, 1))
+	for x := 0; x < 5; x++ {
+		source.SetGray(x, 0, color.Gray{Y: 100})
+	}
+	source.SetGray(2, 0, color.Gray{Y: 110})
+
+	enhanced := enhanceLocalContrast(source, 2, storyLocalContrastPercent)
+	if got := enhanced.GrayAt(2, 0).Y; got <= 110 {
+		t.Fatalf("local highlight = %d, want > 110", got)
+	}
+	if enhanced.GrayAt(0, 0).Y >= enhanced.GrayAt(2, 0).Y {
+		t.Fatal("local contrast enhancement flattened image detail")
+	}
+}
+
 func TestStoryScrimLeavesWhiteTextContrast(t *testing.T) {
 	copyBandPeak := einkTone(255, 0, 255) * (100 - storyScrimPeakPercent) / 100
 	if copyBandPeak > 110 {

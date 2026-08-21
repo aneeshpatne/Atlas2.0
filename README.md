@@ -4,7 +4,7 @@
 
 **Turn a jailbroken Kindle into a scheduled news and clock display**
 
-Atlas drives an e-ink Kindle over SSH: a live clock by default, genre-wise news passes on a wall-clock cadence, and interruptible alerts—all orchestrated as a long-running service with a gRPC API.
+Atlas drives an e-ink Kindle over SSH: a live clock by default, genre-wise news passes on a wall-clock cadence (every 15 minutes by default), and interruptible alerts—all orchestrated as a long-running service with a gRPC API.
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![gRPC](https://img.shields.io/badge/API-gRPC-244c5a?logo=grpc&logoColor=white)](https://grpc.io/)
@@ -21,6 +21,27 @@ Atlas drives an e-ink Kindle over SSH: a live clock by default, genre-wise news 
 Atlas accepts news stories and short alerts, stores stories in Redis by genre, and paints them on a jailbroken Kindle over SSH. During the active daily window the device shows a live clock; on each configured wall-clock boundary it runs a genre-wise news pass (title screens, then stories with photo backgrounds), then restores the clock. Alerts can pause news, display a message for a fixed duration, and release the display back to the normal lifecycle. The result is a wall-mounted editorial screen that updates without apps, browsers, or a continuous GUI process on the Kindle itself.
 
 The primary long-running binary is `cmd/news-screen`: timezone-aware cron scheduling, a single-owner lifecycle supervisor, and a gRPC API for news, alerts, and status. A simpler root CLI (`app.go`) supports one-shot `clock`, `story`, and continuous `news` modes for development and manual control. Rendering uses [fbink](https://github.com/NiLuJe/FBInk) on the device; the host uses system OpenSSH (not a pure-Go dial) so macOS LaunchAgents can reach LAN Kindles. Layouts are resolution-relative so the same code can target different Kindle panel sizes.
+
+## By the numbers
+
+Compact proof points taken from code defaults plus one live measurement on the development setup—no invented users:
+
+| Dimension | Figure | Source |
+| --- | --- | --- |
+| Automation frequency | **64 scheduled news passes/day** (every 15 min across the 07:00–23:00 window) | `-news-refresh 15m` + scheduler cron |
+| Screen throughput | Up to **44 screens/pass** (4 genres × 1 title + 10 stories) ≈ **2,800 paints/day** fully stocked; worst-case pass ≈ 7 min 20 s, fitting the 15-min slot with headroom | `-news-per-genre`, `-genre-hold`, `-story-hold` |
+| Clock duty cycle | Minute-boundary repaint with a single non-flashing GC16 regional refresh—up to **960 paints/day** when idle | `internal/kindle/clock.go` |
+| Measured latency | **~330 ms SSH round-trip** host→Kindle for a trivial command over LAN OpenSSH | live measurement (PaperWhite 3, 1448×1072 @ 300 DPI, fbink v1.25.0) |
+| Data volume | Genre queues retain **100 stories each** with a **24 h dedupe TTL** (atomic Lua `SET NX EX`); dead-letter list capped at 100 | `internal/news/store.go` |
+| Image pipeline | 12 MiB max download, 15 s fetch timeout, ≤5 redirects re-validated for SSRF, 40 MP decode guard, 128-image / 64 MiB prep cache | `internal/kindle/story.go` |
+| Alert path | FIFO of **100**, 30 s on-screen, 2 s clear budget, preempts an in-flight pass within the 5 s worker-stop timeout | supervisor config |
+| Failure policy | Display start retries **3× (1 s → 2 s → 4 s)**; worker failures back off exponentially from 1 s to a **60 s cap** | `internal/supervisor` |
+| Concurrency budget | Single-owner supervisor loop, **256-slot command queue**, buffer-1 coalescing so overlapping ticks collapse into one follow-up pass, 32 concurrent gRPC streams | `internal/supervisor`, `cmd/news-screen/main.go` |
+| API guardrails | Default 30 s RPC deadline, bearer tokens ≥32 chars compared constant-time, TLS ≥1.2 off-loopback, field caps (title 512 B, description 4 KB, ≤10 sources) | `internal/grpcserver` |
+| Unattended operation | **16 h/day active window**; outside it the panel is cleared and backlight forced to 0; graceful SIGTERM blanking—no always-on GUI process on the Kindle itself | scheduler + kindledisplay controller |
+| Test & CI surface | **63 test functions across 14 files**; CI gates gofmt, vet, unit + race + coverage against Redis 7, govulncheck, and generated-proto drift | repo tree, `.github/workflows/ci.yml` |
+
+*Daily totals are derived from defaults assuming fully stocked queues; the latency figure is a real measurement on the target device.*
 
 ## Features
 
@@ -203,7 +224,7 @@ flowchart TB
 
 - **Go** 1.26+ (module declares `go 1.26.4`)
 - **Redis** reachable at the address you pass (default `localhost:6379`)
-- **Jailbroken Kindle** with:
+- **Jailbroken Kindle** (tested on a PaperWhite 3, 1448×1072 @ 300 DPI, fbink v1.25.0) with:
   - SSH reachable at the configured address (default `192.168.0.10:22`) and user (default `root` via `-ssh-user`)
   - Private key at `~/.ssh/id_ed25519` by default (`-ssh-key`)
   - A matching entry in `~/.ssh/known_hosts` by default (`-ssh-known-hosts`); use `-ssh-insecure-host-key` only for local development

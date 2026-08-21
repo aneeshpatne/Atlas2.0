@@ -29,7 +29,7 @@ const remoteStoryImage = "/tmp/atlas-story-image"
 const (
 	// Bump this whenever the display conversion changes so an older prepared
 	// image can never be mistaken for output from the current pipeline.
-	storyImageCacheVersion = "eink-v2"
+	storyImageCacheVersion = "eink-v3"
 	maxPreparedImages      = 128
 	maxPreparedImageBytes  = 64 << 20
 )
@@ -427,12 +427,15 @@ const storyScrimPeakPercent = 25
 const (
 	// Keep a small non-zero floor so near-black source detail survives the
 	// Kindle's coarse 16-level grayscale conversion.
-	storyShadowFloor = 18
+	storyShadowFloor = 16
 	// White type needs a wide luminance gap from the photo. This ceiling leaves
 	// roughly eight useful e-ink steps below white, even before the copy scrim.
-	storyHighlightCeiling = 140
+	storyHighlightCeiling = 132
 	// Slightly darken midtones while retaining a smooth, detail-preserving toe.
-	storyToneGamma = 0.90
+	storyToneGamma = 0.92
+	// Restore small-scale separation after resizing so the darker output retains
+	// faces, clothing folds, and background edges on a 16-level panel.
+	storyLocalContrastPercent = 40
 )
 
 // storyScrimPercent returns extra darkening (0–100) for a vertical position so
@@ -489,10 +492,11 @@ func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
 
 	resized := image.NewGray(image.Rect(0, 0, width, height))
 	draw.CatmullRom.Scale(resized, resized.Bounds(), source, srcBounds, draw.Over, nil)
+	detail := enhanceLocalContrast(resized, max(2, min(width, height)/80), storyLocalContrastPercent)
 
 	// Ignore the extreme two percent at each end. A small black logo or white
 	// patch should not prevent the photograph itself from using the e-ink range.
-	low, high := grayscalePercentiles(resized, 2, 98)
+	low, high := grayscalePercentiles(detail, 2, 98)
 	if high-low < 32 {
 		// Nearly flat images look more natural without aggressive stretching.
 		low, high = 0, 255
@@ -505,7 +509,7 @@ func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
 		yPct := y * 100 / height
 		scrim := storyScrimPercent(yPct)
 		for x := 0; x < width; x++ {
-			luma := einkTone(int(resized.GrayAt(x, y).Y), low, high)
+			luma := einkTone(int(detail.GrayAt(x, y).Y), low, high)
 			luma = luma * (100 - scrim) / 100
 			background.SetGray(x, y, color.Gray{Y: uint8(luma)})
 		}
@@ -516,6 +520,44 @@ func prepareStoryBackground(data []byte, width, height int) ([]byte, error) {
 		return nil, fmt.Errorf("encode background: %w", err)
 	}
 	return output.Bytes(), nil
+}
+
+// enhanceLocalContrast applies a restrained luminance-only unsharp mask. It
+// improves local separation without introducing color artifacts or requiring
+// the e-ink panel to reproduce a wider brightness range.
+func enhanceLocalContrast(source *image.Gray, radius, amountPercent int) *image.Gray {
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width == 0 || height == 0 || radius < 1 || amountPercent <= 0 {
+		clone := image.NewGray(image.Rect(0, 0, width, height))
+		draw.Draw(clone, clone.Bounds(), source, bounds.Min, draw.Src)
+		return clone
+	}
+
+	// Integral luminance makes each local-mean lookup constant time.
+	stride := width + 1
+	integral := make([]int64, stride*(height+1))
+	for y := 0; y < height; y++ {
+		rowSum := int64(0)
+		for x := 0; x < width; x++ {
+			rowSum += int64(source.GrayAt(bounds.Min.X+x, bounds.Min.Y+y).Y)
+			integral[(y+1)*stride+x+1] = integral[y*stride+x+1] + rowSum
+		}
+	}
+
+	result := image.NewGray(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		y0, y1 := max(0, y-radius), min(height, y+radius+1)
+		for x := 0; x < width; x++ {
+			x0, x1 := max(0, x-radius), min(width, x+radius+1)
+			sum := integral[y1*stride+x1] - integral[y0*stride+x1] - integral[y1*stride+x0] + integral[y0*stride+x0]
+			mean := int(sum / int64((x1-x0)*(y1-y0)))
+			center := int(source.GrayAt(bounds.Min.X+x, bounds.Min.Y+y).Y)
+			enhanced := center + (center-mean)*amountPercent/100
+			result.SetGray(x, y, color.Gray{Y: uint8(max(0, min(255, enhanced)))})
+		}
+	}
+	return result
 }
 
 func grayscalePercentiles(source *image.Gray, lowPercent, highPercent int) (int, int) {
