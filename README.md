@@ -4,7 +4,7 @@
 
 **Turn a jailbroken Kindle into a scheduled news and clock display**
 
-Atlas drives an e-ink Kindle over SSH: a live clock by default, genre-wise news passes on a wall-clock cadence (every 15 minutes by default), and interruptible alerts—all orchestrated as a long-running service with a gRPC API.
+Atlas is a Go service that turns a jailbroken Kindle into a scheduled editorial display. It combines a timezone-aware cron scheduler, a single-owner lifecycle supervisor, Redis-backed genre queues, signal-driven background work, and SSH/fbink rendering. With the defaults, the 07:00–23:00 active window provides 64 wall-clock news-pass opportunities per day; each active genre retains up to 100 stories and contributes up to 10 stories per pass. The gRPC surface exposes three application RPCs—news ingestion, alerts, and status—plus standard health checks.
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![gRPC](https://img.shields.io/badge/API-gRPC-244c5a?logo=grpc&logoColor=white)](https://grpc.io/)
@@ -22,26 +22,32 @@ Atlas accepts news stories and short alerts, stores stories in Redis by genre, a
 
 The primary long-running binary is `cmd/news-screen`: timezone-aware cron scheduling, a single-owner lifecycle supervisor, and a gRPC API for news, alerts, and status. A simpler root CLI (`app.go`) supports one-shot `clock`, `story`, and continuous `news` modes for development and manual control. Rendering uses [fbink](https://github.com/NiLuJe/FBInk) on the device; the host uses system OpenSSH (not a pure-Go dial) so macOS LaunchAgents can reach LAN Kindles. Layouts are resolution-relative so the same code can target different Kindle panel sizes.
 
-## By the numbers
+## Performance & scale
 
-Compact proof points taken from code defaults plus one live measurement on the development setup—no invented users:
+Repository-derived limits and capacity calculations from the default configuration. The repository does not contain production telemetry or a load-test result, so runtime latency, throughput, uptime, and cost impact are intentionally not presented as measured outcomes.
 
 | Dimension | Figure | Source |
 | --- | --- | --- |
-| Automation frequency | **64 scheduled news passes/day** (every 15 min across the 07:00–23:00 window) | `-news-refresh 15m` + scheduler cron |
-| Screen throughput | Up to **44 screens/pass** (4 genres × 1 title + 10 stories) ≈ **2,800 paints/day** fully stocked; worst-case pass ≈ 7 min 20 s, fitting the 15-min slot with headroom | `-news-per-genre`, `-genre-hold`, `-story-hold` |
-| Clock duty cycle | Minute-boundary repaint with a single non-flashing GC16 regional refresh—up to **960 paints/day** when idle | `internal/kindle/clock.go` |
-| Measured latency | **~330 ms SSH round-trip** host→Kindle for a trivial command over LAN OpenSSH | live measurement (PaperWhite 3, 1448×1072 @ 300 DPI, fbink v1.25.0) |
-| Data volume | Genre queues retain **100 stories each** with a **24 h dedupe TTL** (atomic Lua `SET NX EX`); dead-letter list capped at 100 | `internal/news/store.go` |
-| Image pipeline | 12 MiB max download, 15 s fetch timeout, ≤5 redirects re-validated for SSRF, 40 MP decode guard, 128-image / 64 MiB prep cache | `internal/kindle/story.go` |
-| Alert path | FIFO of **100**, 30 s on-screen, 2 s clear budget, preempts an in-flight pass within the 5 s worker-stop timeout | supervisor config |
-| Failure policy | Display start retries **3× (1 s → 2 s → 4 s)**; worker failures back off exponentially from 1 s to a **60 s cap** | `internal/supervisor` |
-| Concurrency budget | Single-owner supervisor loop, **256-slot command queue**, buffer-1 coalescing so overlapping ticks collapse into one follow-up pass, 32 concurrent gRPC streams | `internal/supervisor`, `cmd/news-screen/main.go` |
-| API guardrails | Default 30 s RPC deadline, bearer tokens ≥32 chars compared constant-time, TLS ≥1.2 off-loopback, field caps (title 512 B, description 4 KB, ≤10 sources) | `internal/grpcserver` |
-| Unattended operation | **16 h/day active window**; outside it the panel is cleared and backlight forced to 0; graceful SIGTERM blanking—no always-on GUI process on the Kindle itself | scheduler + kindledisplay controller |
-| Test & CI surface | **63 test functions across 14 files**; CI gates gofmt, vet, unit + race + coverage against Redis 7, govulncheck, and generated-proto drift | repo tree, `.github/workflows/ci.yml` |
+| News-pass cadence | **64 pass opportunities/day** during the default 16-hour active window (15-minute wall-clock cadence; 16 × 4); requests outside the window are ignored | `internal/config/config.go`, `internal/scheduler/scheduler.go`, `internal/supervisor/supervisor.go` |
+| Content-frame budget | Up to **44 content frames/pass** and **2,816 frames/day** when four genres are present in Redis and each has 10 stories (64 × 4 × (1 + 10)); nominal configured dwell time is **440 seconds/pass**, while wall time depends on SSH, image, and rendering operations | `cmd/news-screen/main.go`, `internal/dashboard/dashboard.go` |
+| Clock refresh budget | Up to **960 minute-boundary clock updates/day** in the active window (16 × 60), each targeting one clock region with a non-flashing GC16 refresh | `internal/kindle/clock.go` |
+| Redis retention | Each genre queue retains **100 stories by default**; pushes use an atomic Lua dedupe/append/trim script with a **24-hour dedupe TTL**, and malformed items go to a **100-entry** dead-letter list | `internal/news/store.go` |
+| Image safety and memory bounds | **12 MiB** maximum download, **15 s** HTTP timeout, at most **5 redirects**, **40 million pixels** maximum decoded image area, and a prepared-image cache capped at **128 entries / 64 MiB** | `internal/kindle/story.go` |
+| Alert handling | **100 waiting alerts** by default, **30 s** display duration, up to **2 s** clear timeout, and a **5 s** worker-stop timeout for news preemption | `internal/config/config.go`, `internal/supervisor/supervisor.go` |
+| Recovery policy | Display startup makes **3 attempts** by default with **1 s → 2 s → 4 s** delays; failed news workers restart with exponential backoff capped at **60 s** | `internal/config/config.go`, `internal/supervisor/supervisor.go` |
+| Concurrency and admission | Single-owner supervisor with a **256-slot** command queue and a buffer-1 refresh signal; gRPC is configured for **32 concurrent streams** and **1 MiB** maximum receive/send messages | `internal/supervisor/supervisor.go`, `cmd/news-screen/main.go` |
+| API validation | Default **30 s** unary deadline; bearer token minimum **32 characters** with constant-time comparison; news title/description caps of **512 B / 4 KiB** and at most **10 sources** per item | `internal/config/config.go`, `internal/grpcserver` |
+| Unattended operation | **16 h/day** active window by default; outside it the panel is cleared and backlight set to 0, and shutdown performs the same cleanup | `internal/scheduler`, `internal/kindledisplay/controller.go` |
+| Test and delivery surface | **63 top-level test functions across 14 test files**; CI runs formatting, vet, Redis 7-backed tests, race tests, coverage generation, `govulncheck`, and generated-protobuf drift verification | repo tree, `.github/workflows/ci.yml` |
 
-*Daily totals are derived from defaults assuming fully stocked queues; the latency figure is a real measurement on the target device.*
+*Frame totals are derived from defaults under the stated four-genre/full-queue assumption. They count content frames, not individual fbink or SSH invocations.*
+
+## Engineering highlights
+
+- **Serialized lifecycle control:** a single supervisor goroutine owns display, news-worker, and alert state. Callers communicate through a bounded command channel, while refresh requests coalesce instead of creating unbounded work when a pass overlaps the next tick.
+- **Atomic queue semantics:** Redis Lua scripts combine deduplication, append, and retention trimming; `LMOVE` rotates stories without deleting them, and invalid JSON is quarantined in a bounded dead-letter list.
+- **Interruptible asynchronous workflow:** the live clock is the default screen, news passes run only on cron or ingestion signals, and alerts cancel the news worker, wait for its stop timeout, then resume or shut down according to lifecycle state.
+- **Defensive edge processing:** image URLs require public HTTPS by default and are revalidated across redirects; downloaded data, decoded dimensions, prepared-image memory, gRPC messages, and user-provided fields all have explicit bounds.
 
 ## Features
 
@@ -334,6 +340,8 @@ go test ./internal/kindle -count=1
 ```
 
 **What the suite covers:** config and scheduler behavior; supervisor FIFO, cancellation, backoff, and shutdown; gRPC validation, bearer auth, `GetStatus`, and error mapping; newsworkflow signaling; backdrop/story rendering and public-image policy; SSH quoting, host/port validation, and context cancellation; and opt-in Redis integration (prefix/limit/dedupe). Set `ATLAS_TEST_REDIS_ADDR` (for example `127.0.0.1:6379`) to run the Redis integration test locally.
+
+The current tree contains **63 top-level test functions across 14 test files**. The CI workflow generates coverage but does not enforce a minimum coverage threshold; it also runs the race detector and the Redis integration path.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs formatting, vet, unit tests against a Redis service, the race detector, coverage, `govulncheck`, and a generated-protobuf drift check.
 
